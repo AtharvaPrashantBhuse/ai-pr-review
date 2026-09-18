@@ -1,0 +1,24 @@
+{
+  "name": "ai-pr-review",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Reusable AI Pull Request Security Review engine — powered by Genesis, Groq, and deterministic Evidence Validation.",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test":             "vitest run",
+    "test:watch":       "vitest",
+    "ai-review":        "node src/cli/index.js",
+    "ai-review:test":   "node src/cli/index.js fixtures/vulnerable.js"
+  },
+  "dependencies": {
+    "dotenv":  "16.4.5",
+    "openai":  "4.47.3",
+    "undici":  "6.18.2"
+  },
+  "devDependencies": {
+    "vitest":  "1.6.0"
+  }
+}

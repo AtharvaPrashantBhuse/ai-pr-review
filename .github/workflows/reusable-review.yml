@@ -1,0 +1,223 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# reusable-review.yml
+#
+# REUSABLE GitHub Actions workflow for AI PR Security Review.
+#
+# This workflow is called by OTHER repositories via workflow_call.
+# It NEVER reviews the ai-pr-review repository itself.
+#
+# How the cross-repository flow works:
+#
+#   CALLER REPOSITORY (e.g. ai-pr-review-demo)
+#     |
+#     | Pull Request opened/updated
+#     |
+#     v  .github/workflows/ai-security-review.yml
+#        jobs.ai-review.uses: YOUR_ORG/ai-pr-review/.github/workflows/reusable-review.yml@main
+#        secrets: GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+#     |
+#     v  THIS FILE (reusable-review.yml in ai-pr-review)
+#        1. Checkout the CALLER repository (using caller event inputs)
+#        2. Get files changed in the CALLER's PR
+#        3. Genesis context (if .genesis/index present in caller repo)
+#        4. Security Agent → Groq/LLM → SQL Injection findings
+#        5. Evidence Validator → VERIFIED / UNVERIFIED
+#        6. GitHub Reporter → comment on CALLER's PR
+#
+# Critical: the checkout step uses inputs from the CALLER event to clone
+# the CALLER repository, not ai-pr-review. The GITHUB_TOKEN and PR context
+# are also from the CALLER repository.
+#
+# Permissions on the CALLER repository's GITHUB_TOKEN:
+#   contents:      read   — checkout + file reading
+#   pull-requests: write  — post review comment
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Reusable AI PR Security Review
+
+on:
+  workflow_call:
+    inputs:
+      # The caller passes these automatically from its github context.
+      # They ensure this workflow operates on the CALLER repository's PR.
+      caller_repo_owner:
+        description: 'Owner of the calling repository (github.repository_owner)'
+        required: false
+        type:    string
+        default: ''
+      caller_repo_name:
+        description: 'Name of the calling repository (github.event.repository.name)'
+        required: false
+        type:    string
+        default: ''
+      caller_ref:
+        description: 'Git ref to checkout in the calling repository (github.ref)'
+        required: false
+        type:    string
+        default: ''
+      pr_number:
+        description: 'Pull Request number in the calling repository'
+        required: false
+        type:    string
+        default: ''
+      node_version:
+        description: 'Node.js version to use'
+        required: false
+        type:    string
+        default: '20'
+
+    secrets:
+      GROQ_API_KEY:
+        description: 'Groq API key for LLM inference'
+        required: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Jobs
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  ai-security-review:
+    name: AI Security Review
+    runs-on: ubuntu-latest
+
+    # These permissions are for the GITHUB_TOKEN of the CALLER repository.
+    # The caller workflow must grant these in its `permissions` block.
+    permissions:
+      contents:      read
+      pull-requests: write
+
+    steps:
+      # ── 1. Checkout the CALLER repository ─────────────────────────────────
+      # We MUST checkout the caller's code, not ai-pr-review.
+      # The caller's repo/ref/token are inherited from the workflow_call context.
+      #
+      # When workflow_call fires, github.repository and github.ref already
+      # point to the CALLER repository. The default checkout action therefore
+      # checks out the CALLER's code automatically.
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+        with:
+          # Explicitly use the caller's ref so we get the PR branch content,
+          # not the default branch.
+          ref:         ${{ github.ref }}
+          # fetch-depth 0 gives Genesis the full history if needed.
+          # If the caller repo commits its .genesis/index, depth 1 is fine.
+          fetch-depth: 0
+
+      # ── 2. Checkout ai-pr-review engine (sparse) ──────────────────────────
+      # We need the review engine code. We check it out into a subdirectory
+      # so it does NOT overwrite the caller's code at the workspace root.
+      #
+      # The CALLER's code stays at: $GITHUB_WORKSPACE  (the default)
+      # The engine lives at:        $GITHUB_WORKSPACE/_ai_review_engine
+      - name: Checkout ai-pr-review engine
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.action_repository || 'YOUR_ORG/ai-pr-review' }}
+          path:        _ai_review_engine
+          # No token needed — ai-pr-review must be a public repository,
+          # or provide a PAT here if it is private.
+
+      # ── 3. Set up Node.js ─────────────────────────────────────────────────
+      - name: Set up Node.js ${{ inputs.node_version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache:        'npm'
+          cache-dependency-path: _ai_review_engine/package-lock.json
+
+      # ── 4. Install ai-pr-review engine dependencies ───────────────────────
+      - name: Install review engine dependencies
+        run:  npm ci --prefer-offline
+        working-directory: _ai_review_engine
+
+      # ── 5. Identify changed files in the caller's PR ──────────────────────
+      - name: Get changed files
+        id:   changed-files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Resolve PR number: prefer explicit input, fall back to event context
+            const prNumber = parseInt(
+              '${{ inputs.pr_number }}' ||
+              context.payload.pull_request?.number ||
+              context.payload.number ||
+              '0'
+            );
+
+            if (!prNumber) {
+              core.warning('No PR number available — skipping changed-file detection.');
+              core.setOutput('count', '0');
+              core.setOutput('files', '');
+              require('fs').writeFileSync('changed-files.txt', '');
+              return;
+            }
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner:       context.repo.owner,
+              repo:        context.repo.repo,
+              pull_number: prNumber,
+              per_page:    100,
+            });
+
+            // Only review added/modified JS/TS files.
+            // Deleted files (status === 'removed') are excluded — they do not
+            // exist in the checkout and the Evidence Validator would reject
+            // every finding against them as UNVERIFIED.
+            const reviewable = files
+              .filter(f => f.status !== 'removed')
+              .map(f => f.filename)
+              .filter(f => /\.(js|jsx|ts|tsx|mjs|cjs)$/.test(f));
+
+            require('fs').writeFileSync('changed-files.txt', reviewable.join('\n'));
+
+            core.setOutput('count', String(reviewable.length));
+            core.setOutput('files', reviewable.join(' '));
+            core.setOutput('pr_number', String(prNumber));
+
+            console.log(`Changed reviewable files (${reviewable.length}):`);
+            reviewable.forEach(f => console.log('  •', f));
+
+      # ── 6. Skip if nothing to review ──────────────────────────────────────
+      - name: Check for reviewable files
+        id:   check
+        run: |
+          COUNT="${{ steps.changed-files.outputs.count }}"
+          if [ -z "$COUNT" ] || [ "$COUNT" -eq "0" ]; then
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "No JS/TS files changed — skipping security review."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "$COUNT file(s) will be reviewed."
+          fi
+
+      # ── 7. Run AI Security Review ─────────────────────────────────────────
+      - name: Run AI Security Review
+        if:   steps.check.outputs.skip == 'false'
+        env:
+          # LLM infrastructure — from GitHub Secret in the CALLER repository
+          GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
+
+          # Tell the review engine where the CALLER repository is checked out.
+          # This is the workspace root — the caller's code is here.
+          REVIEW_REPO_ROOT: ${{ github.workspace }}
+
+          # GitHub reporting — use the CALLER repository's token so the
+          # comment appears on the CALLER's Pull Request, not on ai-pr-review.
+          GITHUB_TOKEN:    ${{ github.token }}
+
+          # PR context for the GitHub Reporter — identifies the CALLER's PR
+          PR_NUMBER:       ${{ steps.changed-files.outputs.pr_number }}
+          PR_REPO_OWNER:   ${{ github.repository_owner }}
+          PR_REPO_NAME:    ${{ github.event.repository.name }}
+
+        run: |
+          node _ai_review_engine/src/cli/index.js \
+            --files-from changed-files.txt \
+            --report-to-pr
+        working-directory: ${{ github.workspace }}
+
+      # ── 8. No JS/TS files changed ─────────────────────────────────────────
+      - name: No reviewable files
+        if:   steps.check.outputs.skip == 'true'
+        run:  echo "✅ No JS/TS files changed in this PR — security review skipped."
