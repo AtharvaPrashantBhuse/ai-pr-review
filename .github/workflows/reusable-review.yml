@@ -111,10 +111,10 @@ jobs:
       # The CALLER's code stays at: $GITHUB_WORKSPACE  (the default)
       # The engine lives at:        $GITHUB_WORKSPACE/_ai_review_engine
       - name: Checkout ai-pr-review engine
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.action_repository || 'YOUR_ORG/ai-pr-review' }}
-          path:        _ai_review_engine
+  uses: actions/checkout@v4
+  with:
+    repository: AtharvaPrashantBhuse/ai-pr-review
+    path: _ai_review_engine
           # No token needed — ai-pr-review must be a public repository,
           # or provide a PAT here if it is private.
 
