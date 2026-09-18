@@ -30,6 +30,8 @@
 import { readFileSync, existsSync } from 'fs';
 import { resolve }                  from 'path';
 
+const SEV_ICON = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🔵' };
+
 // Load .env.local for local development convenience
 try {
   const { config } = await import('dotenv');
@@ -167,7 +169,6 @@ if (allFailed) process.exit(1);
 // Formatting helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SEV_ICON = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🔵' };
 
 function printBanner() {
   console.log('');
