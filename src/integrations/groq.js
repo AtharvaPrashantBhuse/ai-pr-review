@@ -41,7 +41,7 @@ import OpenAI from 'openai';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const GROQ_BASE_URL    = 'https://api.groq.com/openai/v1';
-export const DEFAULT_MODEL    = 'groq/compound-mini';
+export const DEFAULT_MODEL    = 'openai/gpt-oss-20b';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Singleton client — lazy initialisation

@@ -128,13 +128,7 @@ export async function analyseForSecurity(diff, repoContext = '', options = {}) {
     };
   }
 
-  // const model      = options.model || process.env.GROQ_SECURITY_MODEL || DEFAULT_MODEL;
-    const model      = DEFAULT_MODEL;
-    console.log('Groq model:', model);
-    console.log('Diff chars:', diff.length);
-    console.log('Repo context chars:', repoContext.length);
-    console.log('User prompt chars:', userPrompt.length);
-
+  const model      = options.model || process.env.GROQ_SECURITY_MODEL || DEFAULT_MODEL;
   const userPrompt = buildUserPrompt(diff, repoContext);
 
   try {
