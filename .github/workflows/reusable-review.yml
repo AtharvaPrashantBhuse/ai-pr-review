@@ -150,6 +150,7 @@ jobs:
               core.setOutput('count', '0');
               core.setOutput('files', '');
               require('fs').writeFileSync('changed-files.txt', '');
+              require('fs').writeFileSync('pr-diff.txt', '');
               return;
             }
 
@@ -166,17 +167,37 @@ jobs:
             // every finding against them as UNVERIFIED.
             const reviewable = files
               .filter(f => f.status !== 'removed')
-              .map(f => f.filename)
-              .filter(f => /\.(js|jsx|ts|tsx|mjs|cjs)$/.test(f));
+              .filter(f => /\.(js|jsx|ts|tsx|mjs|cjs)$/.test(f.filename));
 
-            require('fs').writeFileSync('changed-files.txt', reviewable.join('\n'));
+            // changed-files.txt — kept for backward-compatibility (legacy --files-from path)
+            require('fs').writeFileSync(
+              'changed-files.txt',
+              reviewable.map(f => f.filename).join('\n')
+            );
+
+            // pr-diff.txt — actual unified-diff patches from the GitHub API.
+            // Each file section uses standard unified-diff headers so contextBuilder
+            // can parse changed line numbers without reading the whole source file.
+            // Files without a patch (binary, too large, etc.) are skipped gracefully.
+            const diffLines = [];
+            for (const f of reviewable) {
+              if (!f.patch) {
+                console.log(`  ⚠ No patch for ${f.filename} — skipping from diff`);
+                continue;
+              }
+              diffLines.push(`--- a/${f.filename}`);
+              diffLines.push(`+++ b/${f.filename}`);
+              diffLines.push(f.patch);
+            }
+            require('fs').writeFileSync('pr-diff.txt', diffLines.join('\n'));
 
             core.setOutput('count', String(reviewable.length));
-            core.setOutput('files', reviewable.join(' '));
+            core.setOutput('files', reviewable.map(f => f.filename).join(' '));
             core.setOutput('pr_number', String(prNumber));
 
             console.log(`Changed reviewable files (${reviewable.length}):`);
-            reviewable.forEach(f => console.log('  •', f));
+            reviewable.forEach(f => console.log('  •', f.filename));
+            console.log(`PR diff written to pr-diff.txt (${diffLines.join('\n').length} chars)`);
 
       # ── 6. Skip if nothing to review ──────────────────────────────────────
       - name: Check for reviewable files
@@ -213,7 +234,7 @@ jobs:
 
         run: |
           node _ai_review_engine/src/cli/index.js \
-            --files-from changed-files.txt \
+            --diff-file pr-diff.txt \
             --report-to-pr
         working-directory: ${{ github.workspace }}
 

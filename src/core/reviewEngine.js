@@ -5,22 +5,23 @@
  *
  * Responsibilities:
  *   - Accept input (diff text, file paths, or a ReviewContext).
- *   - Obtain Genesis repository context for the changed files.
- *   - Invoke the Security Agent with the source code + Genesis context.
+ *   - Build a bounded LLM context via contextBuilder (PR diff + targeted
+ *     source snippets + Genesis context) instead of sending entire files.
+ *   - Invoke the Security Agent with the bounded context.
  *   - Pass every AI finding through the deterministic Evidence Validator.
  *   - Return a structured ReviewResult.
  *
  * The Review Engine is independent of any trigger mechanism.
  * The same engine is called from:
  *   - The CLI  (src/cli/index.js)
- *   - The GitHub Actions reusable workflow  (via src/cli/index.js or directly)
+ *   - The GitHub Actions reusable workflow  (via src/cli/index.js)
  *
  * Pipeline:
  *   Input (diff | file paths | ReviewContext)
  *     ↓
  *   makeReviewContext()          — normalise inputs
  *     ↓
- *   genesisAdapter               — optional repository context
+ *   contextBuilder               — bounded diff + source context + Genesis
  *     ↓
  *   securityAgent                — LLM finds potential SQL Injection
  *     ↓
@@ -33,6 +34,16 @@
  *   - LLM failure returns an error ReviewResult with empty findings.
  *   - Individual file failures (missing file, deleted) are returned as error results
  *     per-file without aborting the rest of the batch.
+ *
+ * Context-size protection:
+ *   Before every LLM call the engine logs:
+ *     [AI-Review] Groq model: <model>
+ *     [AI-Review] Diff chars: <n>
+ *     [AI-Review] Source context chars: <n>
+ *     [AI-Review] Genesis context chars: <n>
+ *     [AI-Review] User prompt chars: <n>
+ *   These diagnostics help diagnose 413/token-limit problems without
+ *   echoing actual source code or secrets.
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -40,9 +51,11 @@ import { resolve, relative, extname } from 'path';
 
 import { makeReviewContext }                       from './reviewContext.js';
 import { makeReviewResult, makeErrorResult }       from './reviewResult.js';
+import { buildContext }                            from './contextBuilder.js';
 import { getContextForFiles, isGenesisAvailable }  from '../genesis/genesisAdapter.js';
 import { analyseForSecurity }                      from '../agents/securityAgent.js';
 import { validateFindings }                        from '../validation/evidenceValidator.js';
+import { DEFAULT_MODEL }                           from '../integrations/groq.js';
 
 // Extensions the engine will review
 const REVIEWABLE_EXTS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
@@ -54,9 +67,16 @@ const REVIEWABLE_EXTS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
 /**
  * Run the full review pipeline on a diff string or a single file path.
  *
+ * When `filePath` is supplied the engine reads the file content and wraps it
+ * in a minimal unified-diff envelope so the context builder can locate the
+ * changed lines.  This preserves backward-compatibility for local/CLI use
+ * while keeping a single code path through contextBuilder.
+ *
+ * When `diff` is supplied (the primary GitHub PR path) it is used directly.
+ *
  * @param {Object} options
- * @param {string}   [options.diff]      - Raw diff text or full file content
- * @param {string}   [options.filePath]  - Absolute or relative path to review
+ * @param {string}   [options.diff]      - Unified diff text (preferred for PR review)
+ * @param {string}   [options.filePath]  - Absolute or relative path to review (local use)
  * @param {string}   [options.repoRoot]  - Repository root (defaults to REVIEW_REPO_ROOT or cwd)
  * @returns {Promise<Object>} ReviewResult
  */
@@ -75,9 +95,17 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
     if (!existsSync(abs)) {
       return makeErrorResult(`File not found: ${filePath}`, start, isGenesisAvailable(effectiveRoot));
     }
-    diffText           = readFileSync(abs, 'utf8');
-    const rel          = relative(effectiveRoot, abs).replace(/\\/g, '/');
-    resolvedFilePaths  = [rel];
+
+    // Wrap the full file in a minimal unified-diff envelope.
+    // This lets contextBuilder parse it to extract changed-line ranges,
+    // and gives the LLM file + line context rather than a raw blob.
+    // We mark every line as added (+) so the context builder treats the
+    // whole file as "changed" — but the source-context extractor will
+    // still only emit function-scoped snippets, not the whole file.
+    const rel        = relative(effectiveRoot, abs).replace(/\\/g, '/');
+    const content    = readFileSync(abs, 'utf8');
+    diffText         = wrapFileAsDiff(rel, content);
+    resolvedFilePaths = [rel];
   }
 
   if (!diffText.trim()) {
@@ -95,19 +123,32 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
 
   // ── Step 1: Genesis context ───────────────────────────────────────────────
   const genesisAvailable = isGenesisAvailable(effectiveRoot);
-  let repoContext = '';
+  let genesisCtx = '';
 
   if (genesisAvailable && resolvedFilePaths.length > 0) {
     try {
-      const genesisCtx = await getContextForFiles(resolvedFilePaths, effectiveRoot);
-      repoContext = genesisCtx.summary || '';
+      const genesisResult = await getContextForFiles(resolvedFilePaths, effectiveRoot);
+      genesisCtx = genesisResult.summary || '';
     } catch {
       // Genesis failure is non-fatal — continue without context
     }
   }
 
-  // ── Step 2: Security Agent ────────────────────────────────────────────────
-  const agentResult = await analyseForSecurity(diffText, repoContext);
+  // ── Step 2: Build bounded context ────────────────────────────────────────
+  const { combined, diagnostics } = buildContext(diffText, effectiveRoot, genesisCtx);
+
+  // Log prompt-size diagnostics (no source code, no secrets)
+  const model = process.env.GROQ_SECURITY_MODEL || DEFAULT_MODEL;
+  console.log(`[AI-Review] Groq model:            ${model}`);
+  console.log(`[AI-Review] Diff chars:            ${diagnostics.diffChars}`);
+  console.log(`[AI-Review] Source context chars:  ${diagnostics.sourceChars}`);
+  console.log(`[AI-Review] Genesis context chars: ${diagnostics.genesisChars}`);
+  console.log(`[AI-Review] User prompt chars:     ${diagnostics.combinedChars}`);
+
+  // ── Step 3: Security Agent ────────────────────────────────────────────────
+  const agentResult = await analyseForSecurity(combined, '');
+  // Note: Genesis context is already embedded in `combined` by buildContext.
+  // We pass an empty string as the second arg to avoid double-including it.
 
   if (!agentResult.llmUsed) {
     return makeReviewResult({
@@ -119,10 +160,12 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
     });
   }
 
-  // ── Step 3: Evidence Validator ────────────────────────────────────────────
+  // ── Step 4: Evidence Validator ────────────────────────────────────────────
+  // The validator reads the actual checked-out source on disk — it is
+  // intentionally NOT limited to the context window sent to the LLM.
   const validatedPairs = validateFindings(agentResult.findings, effectiveRoot);
 
-  // ── Step 4: Merge findings with validation results ────────────────────────
+  // ── Step 5: Merge findings with validation results ────────────────────────
   const findings = validatedPairs.map(({ finding, validation }) => ({
     ...finding,
     verification: validation,
@@ -139,7 +182,7 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
 
 /**
  * Review a specific file.
- * Convenience wrapper around runReview.
+ * Convenience wrapper around runReview — kept for backward-compatibility.
  *
  * @param {string} filePath
  * @param {string} [repoRoot]
@@ -151,6 +194,7 @@ export async function reviewFile(filePath, repoRoot) {
 
 /**
  * Review raw diff/code text.
+ * Primary path for GitHub PR review — the diff is passed directly.
  *
  * @param {string} diff
  * @param {string} [repoRoot]
@@ -161,11 +205,12 @@ export async function reviewDiff(diff, repoRoot) {
 }
 
 /**
- * Review a batch of file paths — primary entry point for GitHub Actions.
+ * Review a batch of file paths — kept for backward-compatibility with the
+ * existing --files-from CLI path.
  *
  * Files are reviewed sequentially to respect Groq rate limits.
  * A file that does not exist is skipped with an error result rather than
- * aborting the entire batch — one bad path must not block the rest.
+ * aborting the entire batch.
  *
  * @param {string[]} filePaths  - Relative or absolute paths
  * @param {string}   [repoRoot]
@@ -221,6 +266,29 @@ export function classifyFiles(rawPaths, repoRoot) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Wrap full file content in a minimal unified-diff envelope.
+ *
+ * This is used when reviewing a single file path (local/CLI mode) so that
+ * contextBuilder can parse it the same way it parses a real PR diff.
+ * Every line is marked as added (+) starting at line 1 so the source-context
+ * extractor knows every line is "in scope", but will still function-scope
+ * the output rather than re-emitting the whole file verbatim.
+ *
+ * @param {string}   relPath  - Relative file path (used in diff headers)
+ * @param {string}   content  - Full file content
+ * @returns {string}          - Minimal unified diff string
+ */
+function wrapFileAsDiff(relPath, content) {
+  const lines  = content.split('\n');
+  const header =
+    `--- a/${relPath}\n` +
+    `+++ b/${relPath}\n` +
+    `@@ -0,0 +1,${lines.length} @@\n`;
+  const body = lines.map(l => `+${l}`).join('\n');
+  return header + body;
+}
 
 /**
  * Extract relative file paths from a unified diff header.

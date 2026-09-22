@@ -662,3 +662,225 @@ describe('Test 13 — validateFindings batch: mixed VERIFIED and UNVERIFIED', ()
     expect(validateFindings('bad', FIXTURES)).toHaveLength(0);
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 14–18 — Context Builder
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  buildContext,
+  extractSourceContext,
+  parseChangedHunks,
+} from '../src/core/contextBuilder.js';
+
+// ─── Test 14 — parseChangedHunks: extracts correct per-file line sets ─────────
+
+describe('Test 14 — parseChangedHunks: parses unified diff correctly', () => {
+  const SAMPLE_DIFF = [
+    '--- a/src/users.js',
+    '+++ b/src/users.js',
+    '@@ -38,6 +38,7 @@',
+    ' function getUserByName(name) {',
+    '-  const sql = `SELECT * FROM users WHERE name = \'${name}\'`;',
+    '+  // VULNERABLE',
+    '+  const sql = `SELECT * FROM users WHERE name = \'${name}\'`;',
+    '   return pool.query(sql);',
+    ' }',
+  ].join('\n');
+
+  it('returns one entry per changed file', () => {
+    const hunks = parseChangedHunks(SAMPLE_DIFF);
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0].file).toBe('src/users.js');
+  });
+
+  it('records the added line numbers (1-based)', () => {
+    const hunks = parseChangedHunks(SAMPLE_DIFF);
+    // Two added lines starting at offset 39 (hunk starts at +38, first context line is 38)
+    expect(hunks[0].ranges.length).toBeGreaterThan(0);
+    // All range starts should be >= 1
+    hunks[0].ranges.forEach(([s, e]) => {
+      expect(s).toBeGreaterThanOrEqual(1);
+      expect(e).toBeGreaterThanOrEqual(s);
+    });
+  });
+
+  it('returns empty array for empty diff', () => {
+    expect(parseChangedHunks('')).toHaveLength(0);
+    expect(parseChangedHunks(null)).toHaveLength(0);
+  });
+
+  it('handles a multi-file diff', () => {
+    const multiDiff = [
+      '--- a/src/a.js',
+      '+++ b/src/a.js',
+      '@@ -1,2 +1,3 @@',
+      ' const x = 1;',
+      '+const y = 2;',
+      ' const z = 3;',
+      '--- a/src/b.ts',
+      '+++ b/src/b.ts',
+      '@@ -10,3 +10,4 @@',
+      ' function foo() {',
+      '+  doSomething();',
+      ' }',
+    ].join('\n');
+    const hunks = parseChangedHunks(multiDiff);
+    expect(hunks).toHaveLength(2);
+    expect(hunks.map(h => h.file)).toContain('src/a.js');
+    expect(hunks.map(h => h.file)).toContain('src/b.ts');
+  });
+});
+
+// ─── Test 15 — extractSourceContext: large file → bounded snippet ─────────────
+
+describe('Test 15 — extractSourceContext: large file produces bounded snippet', () => {
+  // Build a minimal diff that touches only lines around line 201 of large-file.js
+  // (the SQL injection line: "const sql = 'SELECT * FROM reports WHERE id = ' + reportId;")
+  // getUserReport starts at line 198, injection is at line 201.
+  const LARGE_FILE_DIFF = [
+    '--- a/large-file.js',
+    '+++ b/large-file.js',
+    '@@ -198,4 +198,5 @@',
+    ' async function getUserReport(req, res) {',
+    '   const reportId = req.query.reportId;',
+    '+  // VULNERABLE',
+    "   const sql = 'SELECT * FROM reports WHERE id = ' + reportId;  // SQL INJECTION",
+    ' }',
+  ].join('\n');
+
+  it('extracts a non-empty snippet for the changed lines', () => {
+    const snippet = extractSourceContext(LARGE_FILE_DIFF, FIXTURES);
+    expect(snippet.length).toBeGreaterThan(0);
+  });
+
+  it('snippet is much smaller than the full file', () => {
+    const fullFile = readFixture('large-file.js');
+    const snippet  = extractSourceContext(LARGE_FILE_DIFF, FIXTURES);
+    // Snippet must be strictly smaller than the full file
+    expect(snippet.length).toBeLessThan(fullFile.length);
+    // And meaningfully smaller — at most 40% of the full file
+    expect(snippet.length).toBeLessThan(fullFile.length * 0.40);
+  });
+
+  it('snippet contains the vulnerable function name', () => {
+    const snippet = extractSourceContext(LARGE_FILE_DIFF, FIXTURES);
+    expect(snippet).toContain('getUserReport');
+  });
+
+  it('snippet contains the SQL injection evidence', () => {
+    const snippet = extractSourceContext(LARGE_FILE_DIFF, FIXTURES);
+    expect(snippet).toContain('reportId');
+  });
+
+  it('snippet does NOT contain unrelated utility functions', () => {
+    const snippet = extractSourceContext(LARGE_FILE_DIFF, FIXTURES);
+    // These helpers are in completely unrelated sections far from line 211
+    expect(snippet).not.toContain('function isoWeek');
+    expect(snippet).not.toContain('function promisify');
+    expect(snippet).not.toContain('function slugify');
+  });
+
+  it('respects a tight maxChars budget', () => {
+    const snippet = extractSourceContext(LARGE_FILE_DIFF, FIXTURES, 300);
+    expect(snippet.length).toBeLessThanOrEqual(
+      300 + '\n[... source context truncated ...]'.length
+    );
+  });
+});
+
+// ─── Test 16 — buildContext: combined output is bounded ───────────────────────
+
+describe('Test 16 — buildContext: assembles bounded combined output', () => {
+  const SIMPLE_DIFF = [
+    '--- a/vulnerable.js',
+    '+++ b/vulnerable.js',
+    '@@ -20,3 +20,4 @@',
+    ' async function getUserById(req, res) {',
+    "+  // user input flows into SQL",
+    "   const sql = 'SELECT * FROM users WHERE id = ' + userId;",
+    ' }',
+  ].join('\n');
+
+  it('returns diffSection, sourceSection, genesisSection, combined, diagnostics', () => {
+    const ctx = buildContext(SIMPLE_DIFF, FIXTURES, '');
+    expect(ctx).toHaveProperty('diffSection');
+    expect(ctx).toHaveProperty('sourceSection');
+    expect(ctx).toHaveProperty('genesisSection');
+    expect(ctx).toHaveProperty('combined');
+    expect(ctx).toHaveProperty('diagnostics');
+  });
+
+  it('combined contains the PR DIFF section header', () => {
+    const { combined } = buildContext(SIMPLE_DIFF, FIXTURES, '');
+    expect(combined).toContain('=== PR DIFF ===');
+  });
+
+  it('combined contains the RELEVANT SOURCE CONTEXT section when source exists', () => {
+    const { combined } = buildContext(SIMPLE_DIFF, FIXTURES, '');
+    // vulnerable.js exists in FIXTURES so source context should be populated
+    expect(combined).toContain('=== RELEVANT SOURCE CONTEXT ===');
+  });
+
+  it('combined does NOT contain Genesis section when genesisCtx is empty', () => {
+    const { combined } = buildContext(SIMPLE_DIFF, FIXTURES, '');
+    expect(combined).not.toContain('=== REPOSITORY CONTEXT');
+  });
+
+  it('combined contains Genesis section when genesisCtx is provided', () => {
+    const { combined } = buildContext(SIMPLE_DIFF, FIXTURES, 'symbol: getUserById');
+    expect(combined).toContain('=== REPOSITORY CONTEXT (Genesis) ===');
+    expect(combined).toContain('getUserById');
+  });
+
+  it('diagnostics.combinedChars matches combined.length', () => {
+    const { combined, diagnostics } = buildContext(SIMPLE_DIFF, FIXTURES, '');
+    expect(diagnostics.combinedChars).toBe(combined.length);
+  });
+
+  it('enforces AI_REVIEW_MAX_PROMPT_CHARS when set', () => {
+    const origEnv = process.env.AI_REVIEW_MAX_PROMPT_CHARS;
+    process.env.AI_REVIEW_MAX_PROMPT_CHARS = '100';
+    try {
+      const { combined } = buildContext(SIMPLE_DIFF, FIXTURES, 'some genesis context');
+      expect(combined.length).toBeLessThanOrEqual(100);
+    } finally {
+      if (origEnv !== undefined) process.env.AI_REVIEW_MAX_PROMPT_CHARS = origEnv;
+      else delete process.env.AI_REVIEW_MAX_PROMPT_CHARS;
+    }
+  });
+});
+
+// ─── Test 17 — buildContext: deleted / non-existent file ─────────────────────
+
+describe('Test 17 — buildContext: missing file skipped gracefully', () => {
+  const MISSING_FILE_DIFF = [
+    '--- a/src/deleted-service.js',
+    '+++ b/src/deleted-service.js',
+    '@@ -1,3 +1,4 @@',
+    ' function doThings() {',
+    '+  dangerousCall();',
+    ' }',
+  ].join('\n');
+
+  it('still returns a non-empty diffSection even when source file is absent', () => {
+    const { diffSection, sourceSection } = buildContext(MISSING_FILE_DIFF, FIXTURES, '');
+    expect(diffSection.length).toBeGreaterThan(0);
+    // Source section is empty because the file does not exist on disk
+    expect(sourceSection).toBe('');
+  });
+});
+
+// ─── Test 18 — buildContext: empty diff ──────────────────────────────────────
+
+describe('Test 18 — buildContext: empty diff produces empty sections', () => {
+  it('returns empty strings for all sections when diff is empty', () => {
+    const { diffSection, sourceSection, genesisSection, combined } =
+      buildContext('', FIXTURES, '');
+    expect(diffSection).toBe('');
+    expect(sourceSection).toBe('');
+    expect(genesisSection).toBe('');
+    expect(combined).toBe('');
+  });
+});
