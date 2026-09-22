@@ -884,3 +884,306 @@ describe('Test 18 — buildContext: empty diff produces empty sections', () => {
     expect(combined).toBe('');
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 19–26 — Hardcoded Secrets detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Test 19 — Positive: hardcoded API key ────────────────────────────────────
+
+describe('Test 19 — Hardcoded Secrets: hardcoded API key detected and VERIFIED', () => {
+  const mockFinding = {
+    type:        'HARDCODED_SECRET',
+    severity:    'HIGH',
+    confidence:  'HIGH',
+    file:        'hardcoded-secrets.js',
+    line:        18,
+    evidence:    'const API_KEY = "gsk_example_long_credential_value_abc123xyz"',
+    explanation: 'A non-trivial API key string is hardcoded as a literal value. ' +
+                 'If committed to version control it can be extracted and abused.',
+  };
+
+  it('parseFindings normalises HARDCODED_SECRET type correctly', () => {
+    const parsed = parseFindings(JSON.stringify([mockFinding]));
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].type).toBe('HARDCODED_SECRET');
+    expect(parsed[0].severity).toBe('HIGH');
+    expect(parsed[0].confidence).toBe('HIGH');
+  });
+
+  it('Evidence Validator returns VERIFIED for the hardcoded API key line', () => {
+    const result = validateFinding(mockFinding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.sourceLine).toContain('gsk_example');
+  });
+
+  it('Full pipeline: HARDCODED_SECRET finding is VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([mockFinding]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].type).toBe('HARDCODED_SECRET');
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 20 — Positive: hardcoded password ───────────────────────────────────
+
+describe('Test 20 — Hardcoded Secrets: hardcoded password detected and VERIFIED', () => {
+  const mockFinding = {
+    type:        'HARDCODED_SECRET',
+    severity:    'HIGH',
+    confidence:  'HIGH',
+    file:        'hardcoded-secrets.js',
+    line:        21,
+    evidence:    'const dbPassword = "ProductionPassword123!"',
+    explanation: 'A plaintext password is hardcoded as a string literal.',
+  };
+
+  it('Evidence Validator returns VERIFIED for the hardcoded password line', () => {
+    const result = validateFinding(mockFinding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.sourceLine).toContain('ProductionPassword123');
+  });
+
+  it('Full pipeline: password finding is VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([mockFinding]);
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 21 — Positive: hardcoded access token ───────────────────────────────
+
+describe('Test 21 — Hardcoded Secrets: hardcoded access token detected and VERIFIED', () => {
+  const mockFinding = {
+    type:        'HARDCODED_SECRET',
+    severity:    'HIGH',
+    confidence:  'HIGH',
+    file:        'hardcoded-secrets.js',
+    line:        24,
+    evidence:    'const accessToken = "long-example-access-token-value-abcdef1234567890"',
+    explanation: 'A long access token string is hardcoded as a literal value.',
+  };
+
+  it('Evidence Validator returns VERIFIED for the hardcoded token line', () => {
+    const result = validateFinding(mockFinding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.sourceLine).toContain('accessToken');
+  });
+
+  it('Full pipeline: token finding is VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([mockFinding]);
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 22 — Negative: environment variable — must produce no finding ───────
+
+describe('Test 22 — Hardcoded Secrets: env-var usage is NOT a finding', () => {
+  it('parseFindings returns empty array when LLM correctly returns no findings for env-var code', () => {
+    // The LLM should return [] for:  const API_KEY = process.env.API_KEY;
+    // We simulate that correct LLM behaviour here.
+    const findings = parseFindings('[]');
+    expect(findings).toHaveLength(0);
+  });
+
+  it('UNVERIFIED when fabricated finding targets the env-var line with completely unrelated evidence', () => {
+    // Line 29 is "const API_KEY_FROM_ENV = process.env.API_KEY;" — no hardcoded value.
+    // Use evidence whose distinct tokens do not appear on that source line at all.
+    const fabricated = {
+      type:        'HARDCODED_SECRET',
+      severity:    'HIGH',
+      confidence:  'HIGH',
+      file:        'hardcoded-secrets.js',
+      line:        29,
+      evidence:    'Bearer zzz_completelydifferenttokenvalue_xyz_9999',
+      explanation: 'Fabricated — the actual line uses process.env, not a literal.',
+    };
+    const result = validateFinding(fabricated, FIXTURES);
+    // The fabricated evidence shares no meaningful tokens with "process.env.API_KEY"
+    expect(result.status).toBe('UNVERIFIED');
+  });
+});
+
+// ─── Test 23 — Negative: placeholder value — must produce no finding ──────────
+
+describe('Test 23 — Hardcoded Secrets: placeholder values are NOT findings', () => {
+  it('parseFindings returns empty array when LLM correctly returns no findings for placeholder code', () => {
+    // A well-configured LLM should return [] for:  const PLACEHOLDER_KEY = "YOUR_API_KEY";
+    const findings = parseFindings('[]');
+    expect(findings).toHaveLength(0);
+  });
+
+  it('UNVERIFIED when fabricated finding on the placeholder line uses completely unrelated evidence', () => {
+    // Line 32 is: const PLACEHOLDER_KEY = "YOUR_API_KEY";
+    // Fabricate evidence that shares no significant tokens with that line.
+    const fabricatedFinding = {
+      type:        'HARDCODED_SECRET',
+      severity:    'HIGH',
+      confidence:  'HIGH',
+      file:        'hardcoded-secrets.js',
+      line:        32,
+      evidence:    'Bearer zzz_completelydifferenttokenvalue_xyz_9999',
+      explanation: 'Fabricated evidence that does not match the actual placeholder.',
+    };
+    const result = validateFinding(fabricatedFinding, FIXTURES);
+    expect(result.status).toBe('UNVERIFIED');
+  });
+});
+
+// ─── Test 24 — parseFindings: HARDCODED_SECRET schema normalisation ───────────
+
+describe('Test 24 — parseFindings: HARDCODED_SECRET type is normalised correctly', () => {
+  it('uppercases type to HARDCODED_SECRET', () => {
+    const raw = JSON.stringify([{
+      type:        'hardcoded_secret',
+      severity:    'HIGH',
+      confidence:  'HIGH',
+      file:        'src/config.js',
+      line:        5,
+      evidence:    'const secret = "abc123xyz"',
+      explanation: 'Hardcoded credential.',
+    }]);
+    const findings = parseFindings(raw);
+    expect(findings[0].type).toBe('HARDCODED_SECRET');
+  });
+
+  it('normalises invalid severity to LOW for HARDCODED_SECRET', () => {
+    const raw = JSON.stringify([{
+      type:        'HARDCODED_SECRET',
+      severity:    'EXTREME',       // invalid
+      confidence:  'HIGH',
+      file:        'src/config.js',
+      line:        5,
+      evidence:    'const secret = "abc"',
+      explanation: 'test',
+    }]);
+    const findings = parseFindings(raw);
+    expect(findings[0].severity).toBe('LOW');
+  });
+
+  it('CRITICAL severity is accepted for HARDCODED_SECRET', () => {
+    const raw = JSON.stringify([{
+      type:        'HARDCODED_SECRET',
+      severity:    'CRITICAL',
+      confidence:  'HIGH',
+      file:        'src/config.js',
+      line:        5,
+      evidence:    'const privateKey = "-----BEGIN RSA PRIVATE KEY-----"',
+      explanation: 'Private key hardcoded.',
+    }]);
+    const findings = parseFindings(raw);
+    expect(findings[0].severity).toBe('CRITICAL');
+  });
+});
+
+// ─── Test 25 — Regression: SQL Injection still works ─────────────────────────
+
+describe('Test 25 — Regression: SQL Injection detection still works after adding Hardcoded Secrets', () => {
+  const sqlFinding = {
+    type:        'SQL_INJECTION',
+    severity:    'HIGH',
+    confidence:  'HIGH',
+    file:        'vulnerable.js',
+    line:        21,
+    evidence:    "'SELECT * FROM users WHERE id = ' + userId",
+    explanation: 'User input concatenated into SQL.',
+  };
+
+  it('parseFindings still normalises SQL_INJECTION correctly', () => {
+    const parsed = parseFindings(JSON.stringify([sqlFinding]));
+    expect(parsed[0].type).toBe('SQL_INJECTION');
+    expect(parsed[0].severity).toBe('HIGH');
+  });
+
+  it('Evidence Validator still VERIFIES the SQL injection finding', () => {
+    const result = validateFinding(sqlFinding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+  });
+
+  it('Full pipeline: SQL_INJECTION finding is still VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([sqlFinding]);
+    expect(merged[0].type).toBe('SQL_INJECTION');
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 26 — Multiple findings: SQL Injection + Hardcoded Secret together ───
+
+describe('Test 26 — Multiple findings: SQL Injection and Hardcoded Secret in one response', () => {
+  const mixedFindings = [
+    {
+      type:        'SQL_INJECTION',
+      severity:    'HIGH',
+      confidence:  'HIGH',
+      file:        'vulnerable.js',
+      line:        21,
+      evidence:    "'SELECT * FROM users WHERE id = ' + userId",
+      explanation: 'User input concatenated into SQL.',
+    },
+    {
+      type:        'HARDCODED_SECRET',
+      severity:    'HIGH',
+      confidence:  'HIGH',
+      file:        'hardcoded-secrets.js',
+      line:        18,
+      evidence:    'const API_KEY = "gsk_example_long_credential_value_abc123xyz"',
+      explanation: 'API key hardcoded as a string literal.',
+    },
+  ];
+
+  it('parseFindings handles both types in a single response', () => {
+    const parsed = parseFindings(JSON.stringify(mixedFindings));
+    expect(parsed).toHaveLength(2);
+    const types = parsed.map(f => f.type);
+    expect(types).toContain('SQL_INJECTION');
+    expect(types).toContain('HARDCODED_SECRET');
+  });
+
+  it('validateFindings processes both findings independently', () => {
+    const results = validateFindings(mixedFindings, FIXTURES);
+    expect(results).toHaveLength(2);
+    results.forEach(({ finding, validation }) => {
+      expect(finding).toBeDefined();
+      expect(validation).toBeDefined();
+      expect(['VERIFIED', 'UNVERIFIED']).toContain(validation.status);
+    });
+  });
+
+  it('SQL_INJECTION finding is VERIFIED', () => {
+    const results = validateFindings(mixedFindings, FIXTURES);
+    const sql = results.find(r => r.finding.type === 'SQL_INJECTION');
+    expect(sql.validation.status).toBe('VERIFIED');
+  });
+
+  it('HARDCODED_SECRET finding is VERIFIED', () => {
+    const results = validateFindings(mixedFindings, FIXTURES);
+    const secret = results.find(r => r.finding.type === 'HARDCODED_SECRET');
+    expect(secret.validation.status).toBe('VERIFIED');
+  });
+
+  it('Full pipeline merges both findings with their verification status', () => {
+    const merged = runPipelineWithMockFindings(mixedFindings, FIXTURES);
+    expect(merged).toHaveLength(2);
+    merged.forEach(f => {
+      expect(f.verification).toBeDefined();
+      expect(f.verification.status).toBe('VERIFIED');
+    });
+  });
+
+  it('buildCommentBody renders both finding types in the PR comment', () => {
+    const result = makeReviewResult({
+      findings: mixedFindings.map((f, i) => ({
+        ...f,
+        verification: { status: 'VERIFIED', file: f.file, line: f.line, sourceLine: f.evidence },
+      })),
+      genesisAvailable: false,
+      llmUsed:          true,
+      error:            null,
+      durationMs:       500,
+    });
+    const body = buildCommentBody(result);
+    expect(body).toContain('SQL_INJECTION');
+    expect(body).toContain('HARDCODED_SECRET');
+    expect(body).toContain('VERIFIED');
+  });
+});

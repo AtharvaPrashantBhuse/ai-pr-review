@@ -1,7 +1,11 @@
 /**
  * src/agents/securityAgent.js
  *
- * Security Agent — identifies SQL Injection vulnerabilities in changed code.
+ * Security Agent — identifies security vulnerabilities in changed code.
+ *
+ * Currently detects:
+ *   1. SQL Injection (type: "SQL_INJECTION")
+ *   2. Hardcoded Secrets (type: "HARDCODED_SECRET")
  *
  * Responsibility: security analysis only. This agent:
  *   1. Receives changed source code and optional repository context (from Genesis).
@@ -32,7 +36,7 @@
  *
  * Finding shape:
  * {
- *   type:        "SQL_INJECTION"        // SCREAMING_SNAKE_CASE
+ *   type:        "SQL_INJECTION" | "HARDCODED_SECRET"  // SCREAMING_SNAKE_CASE
  *   severity:    "HIGH"                 // LOW | MEDIUM | HIGH | CRITICAL
  *   confidence:  "HIGH"                 // LOW | MEDIUM | HIGH
  *   file:        "src/users.js"         // relative file path
@@ -54,47 +58,88 @@ import { getClient, isGroqAvailable, DEFAULT_MODEL } from '../integrations/groq.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are a senior application-security engineer performing a code review.
-Your task is to analyse the supplied source code and repository context for SQL Injection vulnerabilities.
+Your task is to analyse the supplied source code and repository context for two classes of vulnerability:
 
-Focus on SQL Injection only:
-- User-controlled input (req.query, req.body, req.params, function arguments, external data)
-  concatenated directly into SQL query strings without parameterisation.
-- Template literals that embed user input into SQL strings.
-- String concatenation that embeds user input into SQL strings.
+  1. SQL Injection
+  2. Hardcoded Secrets
+
+─────────────────────────────────────────────────────────────────
+CATEGORY 1 — SQL INJECTION  (type: "SQL_INJECTION")
+─────────────────────────────────────────────────────────────────
+Flag when user-controlled input is concatenated directly into a SQL query string without parameterisation:
+- req.query / req.body / req.params / function arguments embedded into SQL via string concatenation.
+- Template literals that interpolate user input into SQL strings.
 
 Do NOT flag:
-- Parameterised queries using $1, $2, ?, or named parameters — these are SAFE.
-- Prepared statements — these are SAFE.
-- Static SQL with no user-controlled input — this is SAFE.
-- Theoretical or speculative issues — only report clear, exploitable SQL injection.
+- Parameterised queries using $1, $2, ?, or named parameters — SAFE.
+- Prepared statements — SAFE.
+- Static SQL with no user-controlled input — SAFE.
+- Theoretical or speculative issues — only report clear, exploitable injection.
 
+─────────────────────────────────────────────────────────────────
+CATEGORY 2 — HARDCODED SECRETS  (type: "HARDCODED_SECRET")
+─────────────────────────────────────────────────────────────────
+Flag when a secret credential is written as a literal value directly in source code.
+
+Credential types to look for:
+- API keys and API tokens (e.g. "sk-...", "gsk_...", "AIza...", "AKIA...")
+- Access tokens, bearer tokens, OAuth client secrets
+- Passwords and database passwords assigned as string literals
+- JWT signing secrets
+- AWS / GCP / Azure credential strings
+- GitHub personal access tokens (ghp_..., github_pat_...)
+- Private keys and certificate private keys (PEM blocks: "-----BEGIN ... PRIVATE KEY-----")
+- Service account credentials and connection strings containing passwords
+
+Flag only when BOTH of these are true:
+  a) The value is a non-trivial string literal (not read from an environment variable or config file).
+  b) The value and surrounding context suggest it is a real credential, not a placeholder.
+
+Do NOT flag:
+- Environment variable reads: process.env.SECRET, os.environ["KEY"], config.get("pass") — SAFE.
+- Variable declarations where the value is process.env.* or equivalent — SAFE.
+- Obvious template placeholders: "YOUR_API_KEY", "<API_KEY>", "replace-me", "example-token",
+  "YOUR_SECRET", "TODO", "xxx", "test", "dummy", "changeme" — NOT a real secret.
+- Short generic strings used as configuration flags or identifiers (e.g. "admin", "user", "dev").
+- Test fixture values that are clearly non-production (e.g. in files named *.test.js, *.spec.js,
+  fixture files with comment "test only").
+
+For a HARDCODED_SECRET finding, set severity as follows:
+- CRITICAL: private key, root credential, or production key with broad access scope.
+- HIGH: API key / token / password that appears to be real and in production code.
+- MEDIUM: suspicious credential-like value where confidence is lower.
+
+─────────────────────────────────────────────────────────────────
+OUTPUT FORMAT
+─────────────────────────────────────────────────────────────────
 Return ONLY a valid JSON array. No markdown, no commentary, no text outside the JSON.
-If no SQL injection vulnerabilities are found return an empty array: []
+If no vulnerabilities are found return an empty array: []
 
 Each finding must follow this exact schema:
 {
-  "type":        "SQL_INJECTION",
+  "type":        "SQL_INJECTION" | "HARDCODED_SECRET",
   "severity":    "<LOW|MEDIUM|HIGH|CRITICAL>",
   "confidence":  "<LOW|MEDIUM|HIGH>",
   "file":        "<relative file path exactly as shown in the code, or 'unknown' if not determinable>",
   "line":        <integer — 1-based line number in the file after the change>,
   "evidence":    "<the exact line of code containing the vulnerability>",
-  "explanation": "<concise explanation: what user input flows into the query and how it could be exploited>"
+  "explanation": "<concise explanation of why this is a vulnerability and what the risk is>"
 }
 
 Rules:
-- Use HIGH or CRITICAL severity only when there is a clear, direct exploitation path.
+- Use HIGH or CRITICAL severity only when there is a clear, direct exploitation path or exposure risk.
 - The "line" field must be the actual line number in the file, not the diff offset.
 - The "evidence" field must be a verbatim or near-verbatim copy of the vulnerable line.
 - If the full file is shown, derive exact line numbers by counting from line 1.
-- If only a partial diff is shown, estimate line numbers from the diff context markers (+/- lines).`;
+- If only a partial diff is shown, estimate line numbers from the diff context markers (+/- lines).
+- Do not fabricate evidence — only report what is explicitly present in the supplied code.`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Analyse a code diff or file content for SQL Injection vulnerabilities.
+ * Analyse a code diff or file content for SQL Injection and Hardcoded Secret vulnerabilities.
  *
  * @param {string} diff            - The changed source code or unified diff text
  * @param {string} [repoContext]   - Repository context summary from genesisAdapter
@@ -196,7 +241,7 @@ function buildUserPrompt(diff, repoContext) {
 
   prompt += '=== SOURCE CODE TO REVIEW ===\n';
   prompt += diff.trim();
-  prompt += '\n\nAnalyse the above for SQL Injection vulnerabilities. Return only a JSON array of findings.';
+  prompt += '\n\nAnalyse the above for SQL Injection and Hardcoded Secret vulnerabilities. Return only a JSON array of findings.';
 
   return prompt;
 }
