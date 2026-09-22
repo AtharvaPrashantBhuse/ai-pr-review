@@ -157,7 +157,7 @@ source. See [docs/security-agent.md](docs/security-agent.md).
 npm test
 ```
 
-Latest measured result: **150 tests pass** (Vitest). The suite covers SQL
+Latest measured result: **163 tests pass** (Vitest). The suite covers SQL
 Injection detection, Hardcoded Secrets detection (positive and negative cases),
 the Evidence Validator (VERIFIED / UNVERIFIED paths), the Context Builder
 bounding, the Quality Agent catalog and configuration, and the GitHub Reporter

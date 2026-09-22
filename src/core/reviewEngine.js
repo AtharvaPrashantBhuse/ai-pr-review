@@ -56,6 +56,7 @@ import { getContextForFiles, isGenesisAvailable }  from '../genesis/genesisAdapt
 import { analyseForSecurity }                      from '../agents/securityAgent.js';
 import { analyseForQuality }                        from '../agents/qualityAgent.js';
 import { resolveQualityConfig }                     from '../agents/checkCatalog.js';
+import { dedupeFindings }                           from './findingDedup.js';
 import { validateFindings }                        from '../validation/evidenceValidator.js';
 import { DEFAULT_MODEL }                           from '../integrations/groq.js';
 
@@ -191,11 +192,13 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
     });
   }
 
-  // Merge findings from every agent that ran successfully.
-  const rawFindings = [
+  // Merge findings from every agent that ran successfully, then collapse
+  // overlapping findings on the same location so reviewers do not see the same
+  // line flagged several times (e.g. LOGIC_ERROR + MAGIC_NUMBER on one line).
+  const rawFindings = dedupeFindings([
     ...securityResult.findings,
     ...(qualityResult?.findings || []),
-  ];
+  ]);
 
   // Combine agent errors (e.g. one agent hit a rate limit but the other worked)
   // into a single non-fatal note so the caller still gets partial results.

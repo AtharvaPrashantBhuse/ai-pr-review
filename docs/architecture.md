@@ -27,6 +27,9 @@ Context Builder  (src/core/contextBuilder.js)
 Security Agent + Quality Agent  (src/agents/*)
       │  bounded prompt → Groq → LLM → structured JSON findings
       ▼
+Finding Dedup  (src/core/findingDedup.js)
+      │  merge overlapping same-location findings (no LLM)
+      ▼
 Evidence Validator  (src/validation/evidenceValidator.js)
       │  deterministic verification against checked-out source (no LLM)
       ▼
@@ -48,6 +51,7 @@ PR comment on the caller repository
 | **Check Catalog** | `src/agents/checkCatalog.js` | Single source of truth for quality categories/types and their environment-driven configuration (toggles, severity floor). |
 | **Finding Parser** | `src/agents/findingParser.js` | Shared, type-agnostic parser that turns raw LLM text into normalised findings (strips code fences, coerces fields, carries an optional multi-line `endLine`). |
 | **Groq integration** | `src/integrations/groq.js` | Builds the OpenAI-SDK client pointed at the Groq endpoint. Reads `GROQ_API_KEY` from the environment; keeps TLS verification enabled; supports a corporate proxy. |
+| **Finding Dedup** | `src/core/findingDedup.js` | Deterministically merges overlapping findings on the same file+line span into one primary (security always wins), recording the other types as `alsoFlaggedAs`. Reduces reviewer noise. Never uses an LLM. |
 | **Evidence Validator** | `src/validation/evidenceValidator.js` | Deterministically verifies each finding against the checked-out source. Never uses an LLM. Marks findings VERIFIED or UNVERIFIED. |
 | **GitHub integration** | `src/integrations/github.js` | Low-level GitHub REST calls (post PR comment, list PR files). |
 | **GitHub Reporter** | `src/reporting/githubReporter.js` | Formats a ReviewResult into a Markdown comment and posts it to the caller's PR. Never approves, merges, blocks, or edits the PR. |
@@ -56,18 +60,26 @@ PR comment on the caller repository
 
 ### Genesis status (current)
 
-Genesis context is **optional** and is used only when
-`isGenesisAvailable()` finds both a `.genesis/index/graph.json` in the repository
-under review **and** the Genesis query module on the machine. Neither is present
-in this repository, so:
+Genesis context is **optional**. It is used only when `isGenesisAvailable()`
+finds both a `.genesis/index/graph.json` in the repository under review **and**
+the Genesis query module on the machine.
 
-- The engine currently runs **without** Genesis context.
-- Reviews report `genesisAvailable: false`.
-- The Context Builder emits no Genesis section by default (verified by the test
-  suite).
+**In the reusable workflow (CI):** Genesis is active. `reusable-review.yml`
+checks out the Genesis toolkit and runs `genesis index` on the caller checkout
+before the review, producing a fresh `.genesis/index/graph.json` that matches
+the exact PR code. Reviews then report `genesisAvailable: ✓` and the Context
+Builder includes a repository-context section (symbols, dependencies, blast
+radius). The indexing step is best-effort (`continue-on-error`): if it fails,
+the review still runs without Genesis.
 
-The pipeline is designed so that Genesis is a pure enrichment: when it is
-absent, the agents run on the PR diff and targeted source context alone.
+**Locally / by default:** the engine runs without Genesis unless a
+`.genesis/index` has been generated in the repository under review (e.g. by
+running `genesis index .`). This engine repository does not commit its own
+index — it is a generated artifact, regenerated on demand.
+
+The pipeline treats Genesis as pure enrichment: when it is absent, the agents
+run on the PR diff and targeted source context alone, and `genesisAvailable` is
+`false`.
 
 ---
 

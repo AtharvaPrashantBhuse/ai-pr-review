@@ -65,6 +65,29 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - Added `scripts/smoke-test.js` (`npm run smoke`) for a manual, `GROQ_API_KEY`-
   guarded live check against fixtures.
 
+### Genesis activation in CI
+
+- The reusable workflow now checks out the Genesis toolkit and runs
+  `genesis index` on the caller checkout before the review, so Genesis is
+  **active in CI** with a fresh index matching the exact PR code
+  (`genesisAvailable: ✓`). The step is best-effort — indexing failure falls
+  back to a review without Genesis context.
+
+### Finding de-duplication and review-quality fixes
+
+- Added `src/core/findingDedup.js`: overlapping findings on the same file and
+  line span are merged into a single primary (highest severity; security
+  findings always win), with the other types recorded as `alsoFlaggedAs`.
+  Wired into the Review Engine before validation; surfaced in the reporter and
+  CLI. Reduces reviewer noise (e.g. one line no longer appears as separate
+  LOGIC_ERROR and MAGIC_NUMBER findings).
+- Quality-agent robustness fixes: warn on unknown category keys in
+  `AI_REVIEW_QUALITY_CATEGORIES` / `AI_REVIEW_DISABLE_CATEGORIES` (instead of
+  silently disabling everything on a typo); the Quality Agent honours the
+  `AI_REVIEW_ENABLE_QUALITY` master switch defensively; the prompt builder warns
+  if an enabled category has no instruction block; removed dead code and
+  corrected a misleading doc comment.
+
 ### Testing milestones
 
 - Fully mocked, offline test suite (`tests/review.test.js`, Vitest) — no
@@ -72,8 +95,9 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - Coverage for SQL Injection (positive/negative/multiple), Hardcoded Secrets
   (positive/negative/normalisation/regression/mixed), the Evidence Validator
   (VERIFIED and UNVERIFIED paths), the Context Builder bounding, the Quality
-  Agent catalog/config and range validation, and the GitHub Reporter.
-- Latest measured result: **150 tests passing**.
+  Agent catalog/config and range validation, finding de-duplication, and the
+  GitHub Reporter.
+- Latest measured result: **163 tests passing**.
 - CI (`.github/workflows/ci.yml`) runs the suite on push and pull_request.
 
 ### Documentation
@@ -84,8 +108,9 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Notes
 
-- **Genesis** repository intelligence is integrated as an optional input but is
-  **inactive** in this repository (no `.genesis/index` present); reviews run
-  without Genesis context.
+- **Genesis** repository intelligence is optional. It is **active in the
+  reusable CI workflow** (a fresh index is built per PR) and inactive locally
+  unless a `.genesis/index` is generated in the repository under review. This
+  engine repository does not commit its own index (generated artifact).
 - Future/proposed items (GitHub App, autonomous fixes, auto-merge/approve,
   dashboard) are **not implemented** — see `docs/architecture.md`.

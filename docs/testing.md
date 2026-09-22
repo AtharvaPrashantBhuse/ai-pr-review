@@ -12,9 +12,9 @@ Grounded in `tests/review.test.js`, `vitest.config.js`, and the workflows under
 - **Offline & deterministic:** every test that would call the LLM injects mock
   findings through the same parse → validate → report path used in production.
   **No real Groq calls are made and `GROQ_API_KEY` is not required.**
-- **Structure:** 49 `describe` groups (labelled Test 1–49) covering the Security
+- **Structure:** 55 `describe` groups (labelled Test 1–55) covering the Security
   Agent, Hardcoded Secrets, the Evidence Validator, the Context Builder, the
-  Quality Agent catalog/config, and the GitHub Reporter.
+  Quality Agent catalog/config, finding de-duplication, and the GitHub Reporter.
 
 Run it:
 
@@ -26,10 +26,10 @@ npm test
 
 ```
 Test Files  1 passed (1)
-Tests       150 passed (150)
+Tests       163 passed (163)
 ```
 
-(150 assertions passing, measured with Vitest. Duration is a few seconds on a
+(163 assertions passing, measured with Vitest. Duration is a few seconds on a
 typical machine.)
 
 ---
@@ -85,6 +85,11 @@ only when it matches the checked-out source.
   (defaults, allow-list, disable-list, severity floor) resolves correctly; range
   (multi-line) findings validate against their span; and the reporter groups
   findings by category.
+- **Finding de-duplication (Tests 50–55):** overlapping same-location findings
+  merge into one primary (security always wins) with the others recorded as
+  `alsoFlaggedAs`; findings on different lines or in different files stay
+  separate; unknown category keys warn; the master switch is honoured; deduped
+  findings still validate correctly.
 
 ---
 

@@ -125,6 +125,9 @@ function printFileResult(label, result) {
     console.log(`    File         : ${f.file}`);
     console.log(`    Line         : ${f.endLine && f.endLine > f.line ? `${f.line}-${f.endLine}` : f.line}`);
     console.log(`    Evidence     : ${f.evidence}`);
+    if (Array.isArray(f.alsoFlaggedAs) && f.alsoFlaggedAs.length > 0) {
+      console.log(`    Also flagged : ${f.alsoFlaggedAs.join(', ')}`);
+    }
     console.log(`    Explanation  : ${f.explanation}`);
     console.log(`    Verification : ${verify}`);
     if (f.verification?.status === 'UNVERIFIED') {

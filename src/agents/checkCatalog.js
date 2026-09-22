@@ -26,6 +26,13 @@
  *                                   e.g. "style,maintainability"
  *   AI_REVIEW_QUALITY_MIN_SEVERITY  drop findings below this severity
  *                                   one of LOW|MEDIUM|HIGH|CRITICAL (default LOW)
+ *                                   NOTE: this floor applies to QUALITY findings
+ *                                   only. Security findings are on a separate
+ *                                   path and are never suppressed by it.
+ *
+ * Unknown category keys in AI_REVIEW_QUALITY_CATEGORIES or
+ * AI_REVIEW_DISABLE_CATEGORIES are ignored, and a warning is logged so a typo
+ * (e.g. "corectness") does not silently disable everything.
  *
  * Category keys are lowercase; finding types are SCREAMING_SNAKE_CASE.
  */
@@ -132,12 +139,6 @@ export const RANGE_TYPES = new Set(
   CATEGORIES.flatMap(c => c.rangeTypes)
 );
 
-/** type → category key */
-const TYPE_TO_CATEGORY = new Map();
-for (const c of CATEGORIES) {
-  for (const t of c.types) TYPE_TO_CATEGORY.set(t, c.key);
-}
-
 /** type → category descriptor (label, icon, key) */
 const TYPE_TO_CATEGORY_META = new Map();
 for (const c of CATEGORIES) {
@@ -196,6 +197,27 @@ function isFalsey(value) {
 }
 
 /**
+ * Log a warning for any category keys that are not recognised. A typo in the
+ * config (e.g. "corectness") would otherwise be dropped silently — and if it
+ * was the only entry in the allow-list, the whole agent would quietly do
+ * nothing. Warning makes the misconfiguration visible.
+ *
+ * @param {string[]} keys      keys supplied by the user
+ * @param {Set<string>} known  the set of valid category keys
+ * @param {string} source      the env var name, for the message
+ */
+function warnUnknownCategories(keys, known, source) {
+  const unknown = keys.filter(k => !known.has(k));
+  if (unknown.length > 0) {
+    console.warn(
+      `[AI-Review] Ignoring unknown categor${unknown.length === 1 ? 'y' : 'ies'} ` +
+      `in ${source}: ${unknown.join(', ')}. ` +
+      `Valid categories: ${[...known].join(', ')}.`
+    );
+  }
+}
+
+/**
  * Resolve the effective quality configuration from the environment.
  *
  * @param {Object} [env=process.env]
@@ -210,13 +232,13 @@ export function resolveQualityConfig(env = process.env) {
   // Master switch
   const enabled = !isFalsey(env.AI_REVIEW_ENABLE_QUALITY ?? 'true');
 
-  const allKeys = CATEGORIES.map(c => c.key);
+  const known = new Set(CATEGORIES.map(c => c.key));
   let enabledCategories;
 
   const explicit = parseList(env.AI_REVIEW_QUALITY_CATEGORIES);
   if (explicit.length > 0) {
+    warnUnknownCategories(explicit, known, 'AI_REVIEW_QUALITY_CATEGORIES');
     // Explicit allow-list: ONLY these categories (that are known) run.
-    const known = new Set(allKeys);
     enabledCategories = new Set(explicit.filter(k => known.has(k)));
   } else {
     // Start from the default-on set, then apply the disable list.
@@ -226,6 +248,7 @@ export function resolveQualityConfig(env = process.env) {
   }
 
   const disabled = parseList(env.AI_REVIEW_DISABLE_CATEGORIES);
+  warnUnknownCategories(disabled, known, 'AI_REVIEW_DISABLE_CATEGORIES');
   for (const key of disabled) enabledCategories.delete(key);
 
   // Expand enabled categories into their finding types.
@@ -248,9 +271,13 @@ export function resolveQualityConfig(env = process.env) {
 
 /**
  * Filter a list of parsed findings down to the configured quality types and
- * severity floor. Types not owned by any quality category are left untouched
- * ONLY if `keepUnknown` is true (the security path passes its own findings
- * through a different filter, so this is quality-only by default).
+ * severity floor.
+ *
+ * Only findings whose `type` belongs to an enabled quality category are kept;
+ * any other type (including security types, or an unexpected type from the LLM)
+ * is dropped here. The severity floor is applied on top. This is intentionally
+ * quality-only: security findings are produced and filtered on a separate path
+ * and are never subject to the quality severity floor.
  *
  * @param {Array}  findings
  * @param {Object} config      result of resolveQualityConfig()

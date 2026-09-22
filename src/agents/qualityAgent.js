@@ -159,8 +159,21 @@ the change itself makes this evident. Report the line of the untested logic.
  * @returns {string}
  */
 function buildSystemPrompt(config) {
-  const enabledBlocks = CATEGORIES
-    .filter(c => config.enabledCategories.has(c.key))
+  const enabledCats = CATEGORIES.filter(c => config.enabledCategories.has(c.key));
+
+  // Guard: an enabled category with no instruction block would be silently
+  // omitted from the prompt, so its types would be "enabled" yet the model
+  // gets no guidance on them. Surface that as a warning rather than hide it.
+  const missing = enabledCats.filter(c => !CATEGORY_INSTRUCTIONS[c.key]);
+  if (missing.length > 0) {
+    console.warn(
+      `[AI-Review] No prompt instructions for enabled categor` +
+      `${missing.length === 1 ? 'y' : 'ies'}: ${missing.map(c => c.key).join(', ')}. ` +
+      `Findings of these types will not be guided by the prompt.`
+    );
+  }
+
+  const enabledBlocks = enabledCats
     .map(c => CATEGORY_INSTRUCTIONS[c.key])
     .filter(Boolean);
 
@@ -250,6 +263,13 @@ function buildUserPrompt(diff, repoContext) {
  */
 export async function analyseForQuality(diff, repoContext = '', options = {}) {
   const config = options.config || resolveQualityConfig();
+
+  // Respect the master switch defensively. The Review Engine already gates on
+  // config.enabled, but honouring it here too means a direct caller cannot
+  // accidentally run the agent when quality review is switched off.
+  if (!config.enabled) {
+    return { findings: [], error: null, llmUsed: false, skipped: true };
+  }
 
   // If every category is disabled there is nothing to ask the model.
   if (config.enabledTypes.size === 0) {

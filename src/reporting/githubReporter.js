@@ -182,6 +182,9 @@ export function buildCommentBody(results) {
     lines.push(`| **Confidence** | ${f.confidence} |`);
     lines.push(`| **File**       | \`${f.file}\` |`);
     lines.push(`| **Line${f.endLine && f.endLine > f.line ? 's' : ''}**       | ${lineLabel} |`);
+    if (Array.isArray(f.alsoFlaggedAs) && f.alsoFlaggedAs.length > 0) {
+      lines.push(`| **Also flagged as** | ${f.alsoFlaggedAs.join(', ')} |`);
+    }
     lines.push(`| **Verification** | ${verIcon} |`);
     lines.push('');
 

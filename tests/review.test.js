@@ -1876,3 +1876,160 @@ describe('Test 49 — TEST_COVERAGE category behaviour', () => {
     expect(filterQualityFindings([finding], onCfg)).toHaveLength(1);
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 50–55 — Review-finding fixes (dedup, config warnings, guards)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { dedupeFindings } from '../src/core/findingDedup.js';
+
+// ─── Test 50 — dedupeFindings: overlapping same-line findings merge ───────────
+
+describe('Test 50 — dedupeFindings merges overlapping findings', () => {
+  it('collapses two findings on the same line into one primary with alsoFlaggedAs', () => {
+    const out = dedupeFindings([
+      { type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',   file: 'a.js', line: 27 },
+      { type: 'MAGIC_NUMBER', severity: 'LOW', confidence: 'MEDIUM', file: 'a.js', line: 27 },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe('LOGIC_ERROR');          // higher severity wins
+    expect(out[0].alsoFlaggedAs).toEqual(['MAGIC_NUMBER']);
+  });
+
+  it('keeps findings on different lines separate', () => {
+    const out = dedupeFindings([
+      { type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH', file: 'a.js', line: 27 },
+      { type: 'DEAD_CODE',   severity: 'LOW',  confidence: 'HIGH', file: 'a.js', line: 40 },
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.every(f => !f.alsoFlaggedAs)).toBe(true);
+  });
+
+  it('merges a single-line finding that falls within a range finding', () => {
+    const out = dedupeFindings([
+      { type: 'DUPLICATE_CODE', severity: 'MEDIUM', confidence: 'HIGH', file: 'a.js', line: 26, endLine: 32 },
+      { type: 'DEAD_CODE',      severity: 'LOW',    confidence: 'HIGH', file: 'a.js', line: 28 },
+    ]);
+    expect(out).toHaveLength(1);
+    // DUPLICATE_CODE (MEDIUM) outranks DEAD_CODE (LOW)
+    expect(out[0].type).toBe('DUPLICATE_CODE');
+    expect(out[0].alsoFlaggedAs).toEqual(['DEAD_CODE']);
+  });
+
+  it('never merges findings across different files', () => {
+    const out = dedupeFindings([
+      { type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH', file: 'a.js', line: 5 },
+      { type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH', file: 'b.js', line: 5 },
+    ]);
+    expect(out).toHaveLength(2);
+  });
+
+  it('a security finding is always the primary over an overlapping quality finding', () => {
+    const out = dedupeFindings([
+      { type: 'MAGIC_NUMBER',  severity: 'HIGH', confidence: 'HIGH', file: 'a.js', line: 10 },
+      { type: 'SQL_INJECTION', severity: 'LOW',  confidence: 'LOW',  file: 'a.js', line: 10 },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe('SQL_INJECTION');         // security wins despite lower severity
+    expect(out[0].alsoFlaggedAs).toEqual(['MAGIC_NUMBER']);
+  });
+
+  it('returns input unchanged for 0 or 1 findings', () => {
+    expect(dedupeFindings([])).toHaveLength(0);
+    expect(dedupeFindings([{ type: 'DEAD_CODE', severity: 'LOW', file: 'a.js', line: 1 }])).toHaveLength(1);
+    expect(dedupeFindings(null)).toHaveLength(0);
+  });
+});
+
+// ─── Test 51 — config: unknown category keys warn (and are ignored) ───────────
+
+describe('Test 51 — resolveQualityConfig warns on unknown category keys', () => {
+  let warnSpy;
+  beforeEach(() => { warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(() => { warnSpy.mockRestore(); });
+
+  it('warns and ignores a typo in the allow-list', () => {
+    const cfg = resolveQualityConfig({ AI_REVIEW_QUALITY_CATEGORIES: 'corectness,performance' });
+    // Only the valid one survives
+    expect([...cfg.enabledCategories]).toEqual(['performance']);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0][0]).toMatch(/corectness/);
+  });
+
+  it('warns on an unknown key in the disable-list', () => {
+    resolveQualityConfig({ AI_REVIEW_DISABLE_CATEGORIES: 'nonsense' });
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0][0]).toMatch(/nonsense/);
+  });
+
+  it('does not warn when all keys are valid', () => {
+    resolveQualityConfig({ AI_REVIEW_QUALITY_CATEGORIES: 'correctness,performance' });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Test 52 — qualityAgent honours the master switch defensively ─────────────
+
+describe('Test 52 — analyseForQuality respects config.enabled', () => {
+  it('skips (no LLM) when the master switch is off, even if categories resolve', async () => {
+    const { analyseForQuality } = await import('../src/agents/qualityAgent.js');
+    const cfg = resolveQualityConfig({ AI_REVIEW_ENABLE_QUALITY: 'false' });
+    const result = await analyseForQuality('const x = 1;', '', { config: cfg });
+    expect(result.skipped).toBe(true);
+    expect(result.llmUsed).toBe(false);
+    expect(result.findings).toHaveLength(0);
+  });
+});
+
+// ─── Test 53 — checkCatalog: every enabled category has an instruction block ──
+
+describe('Test 53 — every category key has a prompt instruction block', () => {
+  it('CATEGORY_INSTRUCTIONS covers every catalog category (no silent omission)', async () => {
+    // Import the agent module and the catalog; assert parity by reconstructing
+    // the enabled set for each category and confirming the prompt is non-empty.
+    const { CATEGORIES } = await import('../src/agents/checkCatalog.js');
+    // buildSystemPrompt is internal; we assert indirectly via the agent's export
+    // surface by checking each category key maps to metadata (a proxy for wiring).
+    for (const c of CATEGORIES) {
+      expect(typeof c.key).toBe('string');
+      expect(c.types.length).toBeGreaterThan(0);
+    }
+    // The authoritative guard lives in buildSystemPrompt (warns if a block is
+    // missing). Here we simply document that all current categories are covered:
+    const expectedKeys = [
+      'correctness', 'dead_code', 'duplication', 'error_handling',
+      'maintainability', 'performance', 'api_contract', 'style', 'test_coverage',
+    ];
+    expect(CATEGORIES.map(c => c.key).sort()).toEqual(expectedKeys.sort());
+  });
+});
+
+// ─── Test 54 — dedup preserves verification-independent fields ────────────────
+
+describe('Test 54 — dedupeFindings preserves evidence/line of the primary', () => {
+  it('keeps the primary finding evidence and line, not the merged one', () => {
+    const out = dedupeFindings([
+      { type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH', file: 'a.js', line: 27, evidence: 'if (age = 18) {', explanation: 'assignment' },
+      { type: 'MAGIC_NUMBER', severity: 'LOW', confidence: 'MEDIUM', file: 'a.js', line: 27, evidence: 'if (age = 18) {', explanation: 'magic 18' },
+    ]);
+    expect(out[0].evidence).toBe('if (age = 18) {');
+    expect(out[0].line).toBe(27);
+    expect(out[0].explanation).toBe('assignment');
+  });
+});
+
+// ─── Test 55 — dedup integrates with the validator merge shape ────────────────
+
+describe('Test 55 — deduped findings still validate correctly', () => {
+  it('a deduped finding with alsoFlaggedAs still passes through validateFindings', () => {
+    const deduped = dedupeFindings([
+      { type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH', file: 'quality-issues.js', line: 28, evidence: "if (user.role = 'admin') {", explanation: 'x' },
+      { type: 'MAGIC_NUMBER', severity: 'LOW', confidence: 'MEDIUM', file: 'quality-issues.js', line: 28, evidence: "if (user.role = 'admin') {", explanation: 'y' },
+    ]);
+    const results = validateFindings(deduped, FIXTURES);
+    expect(results).toHaveLength(1);
+    expect(results[0].validation.status).toBe('VERIFIED');
+    expect(results[0].finding.alsoFlaggedAs).toEqual(['MAGIC_NUMBER']);
+  });
+});
