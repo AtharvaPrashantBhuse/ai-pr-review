@@ -19,9 +19,10 @@
  * Merge rules within an overlapping group:
  *   - The PRIMARY finding is the one with the highest severity; ties are broken
  *     by highest confidence, then by the widest span, then by original order.
- *   - Security findings are NEVER dropped or merged away: a security finding is
- *     always kept as its own primary. Quality findings may merge into a security
- *     primary as `alsoFlaggedAs`, but a security finding is never demoted.
+ *   - Security findings (any type in the security catalog) are NEVER dropped or
+ *     merged away: a security finding is always kept as its own primary. Quality
+ *     findings may merge into a security primary as `alsoFlaggedAs`, but a
+ *     security finding is never demoted.
  *   - The primary keeps its own type/severity/evidence/etc. The distinct types
  *     of the merged findings are recorded on `primary.alsoFlaggedAs`.
  *
@@ -29,15 +30,16 @@
  * first appearance in the input.
  */
 
+import { ALL_SECURITY_TYPES } from '../agents/securityCatalog.js';
+
 const SEVERITY_RANK   = { LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 };
 const CONFIDENCE_RANK = { LOW: 1, MEDIUM: 2, HIGH: 3 };
-const SECURITY_TYPES  = new Set(['SQL_INJECTION', 'HARDCODED_SECRET']);
 
 function sevRank(f)  { return SEVERITY_RANK[String(f.severity   || '').toUpperCase()] || 0; }
 function confRank(f) { return CONFIDENCE_RANK[String(f.confidence || '').toUpperCase()] || 0; }
 function spanStart(f) { return parseInt(f.line, 10) || 0; }
 function spanEnd(f)   { const e = parseInt(f.endLine, 10); const s = spanStart(f); return Number.isFinite(e) && e >= s ? e : s; }
-function isSecurity(f) { return SECURITY_TYPES.has(f.type); }
+function isSecurity(f) { return ALL_SECURITY_TYPES.has(f.type); }
 
 /**
  * Do two findings overlap? Same file and intersecting line spans.

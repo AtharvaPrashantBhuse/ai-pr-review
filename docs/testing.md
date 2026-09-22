@@ -12,9 +12,10 @@ Grounded in `tests/review.test.js`, `vitest.config.js`, and the workflows under
 - **Offline & deterministic:** every test that would call the LLM injects mock
   findings through the same parse → validate → report path used in production.
   **No real Groq calls are made and `GROQ_API_KEY` is not required.**
-- **Structure:** 55 `describe` groups (labelled Test 1–55) covering the Security
-  Agent, Hardcoded Secrets, the Evidence Validator, the Context Builder, the
-  Quality Agent catalog/config, finding de-duplication, and the GitHub Reporter.
+- **Structure:** 62 `describe` groups (labelled Test 1–62) covering the Security
+  Agent (SQL injection, hardcoded secrets, and the full security catalog), the
+  Evidence Validator, the Context Builder, the Quality Agent catalog/config,
+  finding de-duplication, and the GitHub Reporter.
 
 Run it:
 
@@ -26,10 +27,10 @@ npm test
 
 ```
 Test Files  1 passed (1)
-Tests       163 passed (163)
+Tests       188 passed (188)
 ```
 
-(163 assertions passing, measured with Vitest. Duration is a few seconds on a
+(188 assertions passing, measured with Vitest. Duration is a few seconds on a
 typical machine.)
 
 ---
@@ -90,6 +91,13 @@ only when it matches the checked-out source.
   `alsoFlaggedAs`; findings on different lines or in different files stay
   separate; unknown category keys warn; the master switch is honoured; deduped
   findings still validate correctly.
+- **Security catalog (Tests 56–62):** default/allow-list/disable-list config and
+  severity floor resolve correctly; unknown keys warn; category metadata and
+  range types are correct; representative findings across categories (command
+  injection, code injection, XSS, path traversal, weak hash, insecure random,
+  disabled cert validation) VERIFY against `fixtures/security-issues.js`, a
+  fabricated one is UNVERIFIED; security findings stay primary over overlapping
+  quality findings; the reporter groups security findings by their category.
 
 ---
 

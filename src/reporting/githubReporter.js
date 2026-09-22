@@ -32,6 +32,10 @@
 
 import { postPRComment, isGitHubAvailable } from '../integrations/github.js';
 import { categoryMetaForType }              from '../agents/checkCatalog.js';
+import {
+  ALL_SECURITY_TYPES,
+  securityCategoryMetaForType,
+} from '../agents/securityCatalog.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Severity icons — Unicode works in GitHub Markdown
@@ -44,26 +48,24 @@ const SEV_ICON = {
   LOW:      '🔵',
 };
 
-// Security finding types are owned by the Security Agent. Everything else is
-// categorised via the shared check catalog (categoryMetaForType).
-const SECURITY_TYPES = new Set(['SQL_INJECTION', 'HARDCODED_SECRET']);
-
 /**
- * Display category ("<icon> <label>") for a finding type. Security types map to
- * a single Security bucket; quality types resolve through the catalog so a new
- * category shows up here automatically.
+ * Display category ("<icon> <label>") for a finding type.
+ *
+ * Security types resolve through the security catalog to their specific
+ * category (Injection, Web, Crypto, …) and are prefixed with "Security:" so
+ * they read as a security concern. Quality types resolve through the quality
+ * catalog. Either way a new category shows up here automatically.
  *
  * @param {string} type
  * @returns {string}
  */
 function categoryOf(type) {
-  if (SECURITY_TYPES.has(type)) return '🔐 Security';
+  if (ALL_SECURITY_TYPES.has(type)) {
+    const meta = securityCategoryMetaForType(type);
+    return `${meta.icon} Security: ${meta.label}`;
+  }
   const meta = categoryMetaForType(type);
   return `${meta.icon} ${meta.label}`;
-}
-
-function isSecurityType(type) {
-  return SECURITY_TYPES.has(type);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -251,9 +253,7 @@ function buildCategoryBreakdown(allFindings) {
   const counts = new Map();   // display label → count
 
   for (const f of allFindings) {
-    const label = isSecurityType(f.type)
-      ? '🔐 Security'
-      : (() => { const m = categoryMetaForType(f.type); return `${m.icon} ${m.label}`; })();
+    const label = categoryOf(f.type);
     counts.set(label, (counts.get(label) || 0) + 1);
   }
 

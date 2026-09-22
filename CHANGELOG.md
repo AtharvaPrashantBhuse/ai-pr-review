@@ -65,6 +65,39 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - Added `scripts/smoke-test.js` (`npm run smoke`) for a manual, `GROQ_API_KEY`-
   guarded live check against fixtures.
 
+### Security Agent — full check catalog
+
+- Expanded the Security Agent from two checks (SQL injection, hardcoded secrets)
+  into a full, toggleable catalog (`src/agents/securityCatalog.js`) covering:
+  injection (SQL/NoSQL/command/code/LDAP/XPath/template/header/log), web (XSS,
+  open redirect, CSRF, clickjacking, insecure CORS, postMessage misuse), secrets
+  (hardcoded, in logs/URLs, weak keys), cryptography (weak hash/cipher, insecure
+  random, disabled cert validation, missing TLS, hardcoded IV/salt), files &
+  resources (path traversal, SSRF, unrestricted upload, zip slip, XXE, insecure
+  deserialization, ReDoS), data exposure (sensitive data, verbose errors, mass
+  assignment, PII logging), and configuration (insecure config, missing security
+  headers, dangerous permissions, supply-chain risk).
+- `auth` (missing auth, broken access control/IDOR, insecure JWT/session, weak
+  password policy, privilege escalation) and `api` (rate limit, GraphQL
+  introspection, excessive data exposure) categories are available but **off by
+  default** — they are context-heavy and more false-positive prone.
+- Per-category configuration: `AI_REVIEW_ENABLE_SECURITY`,
+  `AI_REVIEW_SECURITY_CATEGORIES` (allow-list), `AI_REVIEW_DISABLE_SECURITY_CATEGORIES`,
+  `AI_REVIEW_SECURITY_MIN_SEVERITY`. Unknown category keys warn instead of
+  silently disabling everything; the master switch is honoured defensively.
+- The agent now uses a category-scoped prompt (only enabled categories are
+  described to the model), filters results to enabled types + severity floor,
+  and supports range (`endLine`) findings for block-level issues.
+- Reporter now groups security findings by their specific category
+  (e.g. "Security: Injection", "Security: Cryptography"); dedup treats every
+  catalog type as security (security always wins over an overlapping quality
+  finding).
+- Deliberate scope: known-CVE / vulnerable-dependency scanning is **not** done
+  by the LLM — use a dedicated scanner (npm audit / OSV / Dependabot).
+- Added `fixtures/security-issues.js` (command injection, code injection, XSS,
+  path traversal, weak hash, insecure random, disabled cert validation) with
+  fake, test-only payloads.
+
 ### Genesis activation in CI
 
 - The reusable workflow now checks out the Genesis toolkit and runs
@@ -95,9 +128,9 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - Coverage for SQL Injection (positive/negative/multiple), Hardcoded Secrets
   (positive/negative/normalisation/regression/mixed), the Evidence Validator
   (VERIFIED and UNVERIFIED paths), the Context Builder bounding, the Quality
-  Agent catalog/config and range validation, finding de-duplication, and the
-  GitHub Reporter.
-- Latest measured result: **163 tests passing**.
+  Agent catalog/config and range validation, the Security Agent catalog/config,
+  finding de-duplication, and the GitHub Reporter.
+- Latest measured result: **188 tests passing**.
 - CI (`.github/workflows/ci.yml`) runs the suite on push and pull_request.
 
 ### Documentation

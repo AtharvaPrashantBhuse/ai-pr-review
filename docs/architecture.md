@@ -46,8 +46,9 @@ PR comment on the caller repository
 | **Review Engine** | `src/core/reviewEngine.js` | Orchestrates the pipeline. Normalises input (diff, file path, or file list), coordinates context building, both agents, validation, and result assembly. Independent of any trigger. |
 | **Review Context** | `src/core/reviewContext.js` | Normalises run inputs (diff, file paths, repo root, optional PR metadata) into a single structured object. |
 | **Context Builder** | `src/core/contextBuilder.js` | Assembles a **bounded** LLM prompt from the PR diff, targeted source snippets around the changed lines, and Genesis context (when available). Enforces character limits. See [context-management.md](context-management.md). |
-| **Security Agent** | `src/agents/securityAgent.js` | Detects SQL Injection and Hardcoded Secrets. Builds the security prompt, calls Groq, parses/normalises findings. See [security-agent.md](security-agent.md). |
-| **Quality Agent** | `src/agents/qualityAgent.js` | Runs the code-quality catalog over the same context. Prompt is scoped to the enabled categories. |
+| **Security Agent** | `src/agents/securityAgent.js` | Runs the security catalog (injection, web, secrets, crypto, files/resources, data exposure, config; auth and API opt-in) over the bounded context. Category-scoped prompt, config-driven. See [security-agent.md](security-agent.md). |
+| **Security Catalog** | `src/agents/securityCatalog.js` | Single source of truth for security categories/types and their environment-driven configuration (toggles, severity floor). |
+| **Quality Agent** | `src/agents/qualityAgent.js` | Runs the code-quality catalog over the same context. Category-scoped prompt, config-driven. See [quality-agent.md](quality-agent.md). |
 | **Check Catalog** | `src/agents/checkCatalog.js` | Single source of truth for quality categories/types and their environment-driven configuration (toggles, severity floor). |
 | **Finding Parser** | `src/agents/findingParser.js` | Shared, type-agnostic parser that turns raw LLM text into normalised findings (strips code fences, coerces fields, carries an optional multi-line `endLine`). |
 | **Groq integration** | `src/integrations/groq.js` | Builds the OpenAI-SDK client pointed at the Groq endpoint. Reads `GROQ_API_KEY` from the environment; keeps TLS verification enabled; supports a corporate proxy. |

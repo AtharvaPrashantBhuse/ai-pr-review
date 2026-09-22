@@ -56,6 +56,7 @@ import { getContextForFiles, isGenesisAvailable }  from '../genesis/genesisAdapt
 import { analyseForSecurity }                      from '../agents/securityAgent.js';
 import { analyseForQuality }                        from '../agents/qualityAgent.js';
 import { resolveQualityConfig }                     from '../agents/checkCatalog.js';
+import { resolveSecurityConfig }                    from '../agents/securityCatalog.js';
 import { dedupeFindings }                           from './findingDedup.js';
 import { validateFindings }                        from '../validation/evidenceValidator.js';
 import { DEFAULT_MODEL }                           from '../integrations/groq.js';
@@ -158,8 +159,20 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
   // The quality agent runs the enabled subset of the check catalog, controlled
   // by AI_REVIEW_ENABLE_QUALITY plus the per-category toggles. The two agent
   // calls are independent, so they run in parallel.
+  const securityConfig = resolveSecurityConfig();
+  const securityEnabled = securityConfig.enabled && securityConfig.enabledTypes.size > 0;
+
   const qualityConfig  = resolveQualityConfig();
   const qualityEnabled = qualityConfig.enabled && qualityConfig.enabledTypes.size > 0;
+
+  if (securityEnabled) {
+    console.log(
+      `[AI-Review] Security categories:  ${[...securityConfig.enabledCategories].join(', ')}`
+    );
+    console.log(`[AI-Review] Security min severity:${' '}${securityConfig.minSeverity}`);
+  } else {
+    console.log('[AI-Review] Security agent:       disabled');
+  }
 
   if (qualityEnabled) {
     console.log(
@@ -171,18 +184,24 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
   }
 
   const [securityResult, qualityResult] = await Promise.all([
-    analyseForSecurity(combined, ''),
+    securityEnabled
+      ? analyseForSecurity(combined, '', { config: securityConfig })
+      : Promise.resolve(null),
     qualityEnabled
       ? analyseForQuality(combined, '', { config: qualityConfig })
       : Promise.resolve(null),
   ]);
 
   // The review is considered to have used the LLM if either agent did.
-  const llmUsed = securityResult.llmUsed || Boolean(qualityResult?.llmUsed);
+  const llmUsed = Boolean(securityResult?.llmUsed) || Boolean(qualityResult?.llmUsed);
 
-  // If no agent produced a usable LLM result, surface the error and stop.
+  // If neither agent produced a usable LLM result, surface the error and stop.
+  // (When an agent is disabled its result is null and contributes no error.)
   if (!llmUsed) {
-    const error = securityResult.error || qualityResult?.error || 'LLM analysis unavailable.';
+    const error =
+      securityResult?.error ||
+      qualityResult?.error ||
+      'LLM analysis unavailable (both agents disabled or failed).';
     return makeReviewResult({
       findings:         [],
       genesisAvailable,
@@ -196,13 +215,13 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
   // overlapping findings on the same location so reviewers do not see the same
   // line flagged several times (e.g. LOGIC_ERROR + MAGIC_NUMBER on one line).
   const rawFindings = dedupeFindings([
-    ...securityResult.findings,
-    ...(qualityResult?.findings || []),
+    ...(securityResult?.findings || []),
+    ...(qualityResult?.findings  || []),
   ]);
 
   // Combine agent errors (e.g. one agent hit a rate limit but the other worked)
   // into a single non-fatal note so the caller still gets partial results.
-  const agentErrors = [securityResult.error, qualityResult?.error]
+  const agentErrors = [securityResult?.error, qualityResult?.error]
     .filter(Boolean);
   const combinedError = agentErrors.length > 0 ? agentErrors.join(' | ') : null;
 

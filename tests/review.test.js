@@ -1402,7 +1402,7 @@ describe('Test 33 — Reporter: security and quality findings in one comment', (
 
   it('comment shows both category counts', () => {
     const body = buildCommentBody(result);
-    expect(body).toContain('🔐 Security: 1');
+    expect(body).toContain('💉 Security: Injection: 1');
     expect(body).toContain('🐞 Correctness: 1');
   });
 
@@ -1694,7 +1694,7 @@ describe('Test 42 — Reporter: range finding + category breakdown', () => {
 
   it('breakdown lists only categories present', () => {
     const body = buildCommentBody(result);
-    expect(body).toContain('🔐 Security: 1');
+    expect(body).toContain('💉 Security: Injection: 1');
     expect(body).toContain('⚡ Performance: 1');
     // A category with no findings must not appear
     expect(body).not.toContain('Dead Code: ');
@@ -2031,5 +2031,211 @@ describe('Test 55 — deduped findings still validate correctly', () => {
     expect(results).toHaveLength(1);
     expect(results[0].validation.status).toBe('VERIFIED');
     expect(results[0].finding.alsoFlaggedAs).toEqual(['MAGIC_NUMBER']);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 56–62 — Security catalog (full check set, config, verification)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  resolveSecurityConfig,
+  filterSecurityFindings,
+  securityCategoryMetaForType,
+  isSecurityRangeType,
+  ALL_SECURITY_TYPES,
+  SECURITY_RANGE_TYPES,
+  SECURITY_CATEGORIES,
+} from '../src/agents/securityCatalog.js';
+
+// ─── Test 56 — Security catalog default configuration ─────────────────────────
+
+describe('Test 56 — securityCatalog: default configuration', () => {
+  it('enables the tier-1 categories by default', () => {
+    const cfg = resolveSecurityConfig({});
+    ['injection', 'web', 'secrets', 'crypto', 'files', 'data_exposure', 'config']
+      .forEach(k => expect(cfg.enabledCategories.has(k)).toBe(true));
+  });
+
+  it('disables context-heavy categories (auth, api) by default', () => {
+    const cfg = resolveSecurityConfig({});
+    expect(cfg.enabledCategories.has('auth')).toBe(false);
+    expect(cfg.enabledCategories.has('api')).toBe(false);
+  });
+
+  it('allow-list runs ONLY the named categories', () => {
+    const cfg = resolveSecurityConfig({ AI_REVIEW_SECURITY_CATEGORIES: 'injection,crypto' });
+    expect([...cfg.enabledCategories].sort()).toEqual(['crypto', 'injection']);
+  });
+
+  it('disable-list removes categories from defaults', () => {
+    const cfg = resolveSecurityConfig({ AI_REVIEW_DISABLE_SECURITY_CATEGORIES: 'config,web' });
+    expect(cfg.enabledCategories.has('config')).toBe(false);
+    expect(cfg.enabledCategories.has('web')).toBe(false);
+    expect(cfg.enabledCategories.has('injection')).toBe(true);
+  });
+
+  it('enabling auth adds its types (including MISSING_AUTH_CHECK)', () => {
+    const cfg = resolveSecurityConfig({ AI_REVIEW_SECURITY_CATEGORIES: 'auth' });
+    expect(cfg.enabledTypes.has('MISSING_AUTH_CHECK')).toBe(true);
+    expect(cfg.enabledTypes.has('INSECURE_JWT')).toBe(true);
+  });
+
+  it('master switch off is reflected in config.enabled', () => {
+    expect(resolveSecurityConfig({ AI_REVIEW_ENABLE_SECURITY: 'false' }).enabled).toBe(false);
+  });
+});
+
+// ─── Test 57 — Security catalog metadata + range types ────────────────────────
+
+describe('Test 57 — securityCatalog: metadata and range types', () => {
+  it('every catalog type resolves to its category', () => {
+    for (const c of SECURITY_CATEGORIES) {
+      for (const t of c.types) {
+        expect(securityCategoryMetaForType(t).key).toBe(c.key);
+      }
+    }
+  });
+
+  it('unknown type falls back to a generic Security bucket', () => {
+    expect(securityCategoryMetaForType('NONSENSE').label).toBe('Security');
+  });
+
+  it('range types are recognised', () => {
+    expect(isSecurityRangeType('INSECURE_DESERIALIZATION')).toBe(true);
+    expect(isSecurityRangeType('MISSING_AUTH_CHECK')).toBe(true);
+    expect(isSecurityRangeType('SQL_INJECTION')).toBe(false);
+  });
+
+  it('catalog covers a broad set of types', () => {
+    expect(ALL_SECURITY_TYPES.size).toBeGreaterThanOrEqual(40);
+    expect(SECURITY_RANGE_TYPES.size).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── Test 58 — severity floor + type filtering ────────────────────────────────
+
+describe('Test 58 — filterSecurityFindings: floor + enabled types', () => {
+  it('drops findings below the configured floor', () => {
+    const cfg = resolveSecurityConfig({ AI_REVIEW_SECURITY_MIN_SEVERITY: 'HIGH' });
+    const findings = [
+      { type: 'XSS',            severity: 'HIGH',     file: 'a.js', line: 1 },
+      { type: 'INSECURE_CORS',  severity: 'LOW',      file: 'a.js', line: 2 },
+      { type: 'COMMAND_INJECTION', severity: 'CRITICAL', file: 'a.js', line: 3 },
+    ];
+    const kept = filterSecurityFindings(findings, cfg).map(f => f.type).sort();
+    expect(kept).toEqual(['COMMAND_INJECTION', 'XSS']);
+  });
+
+  it('drops findings whose category is disabled', () => {
+    const cfg = resolveSecurityConfig({ AI_REVIEW_SECURITY_CATEGORIES: 'injection' });
+    const findings = [
+      { type: 'SQL_INJECTION', severity: 'HIGH', file: 'a.js', line: 1 },
+      { type: 'WEAK_HASH',     severity: 'HIGH', file: 'a.js', line: 2 },  // crypto — disabled
+    ];
+    const kept = filterSecurityFindings(findings, cfg);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].type).toBe('SQL_INJECTION');
+  });
+});
+
+// ─── Test 59 — unknown category keys warn ─────────────────────────────────────
+
+describe('Test 59 — resolveSecurityConfig warns on unknown keys', () => {
+  let warnSpy;
+  beforeEach(() => { warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(() => { warnSpy.mockRestore(); });
+
+  it('warns and ignores a typo in the allow-list', () => {
+    const cfg = resolveSecurityConfig({ AI_REVIEW_SECURITY_CATEGORIES: 'injektion,crypto' });
+    expect([...cfg.enabledCategories]).toEqual(['crypto']);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0][0]).toMatch(/injektion/);
+  });
+});
+
+// ─── Test 60 — representative security findings VERIFY against source ──────────
+
+describe('Test 60 — Security findings verify against the fixture source', () => {
+  const cases = [
+    { type: 'COMMAND_INJECTION',        line: 23, evidence: "exec('ping -c 1 ' + host, (e, out) => res.send(out));" },
+    { type: 'CODE_INJECTION',           line: 29, evidence: 'const result = eval(expr);' },
+    { type: 'XSS',                      line: 36, evidence: "res.send('<div>' + name + '</div>');" },
+    { type: 'PATH_TRAVERSAL',           line: 42, evidence: "const data = fs.readFileSync('/var/docs/' + file);" },
+    { type: 'WEAK_HASH',                line: 48, evidence: "return crypto.createHash('md5').update(pw).digest('hex');" },
+    { type: 'INSECURE_RANDOM',          line: 53, evidence: 'return Math.random().toString(36).slice(2);' },
+    { type: 'DISABLED_CERT_VALIDATION', line: 58, evidence: 'const agent = new https.Agent({ rejectUnauthorized: false });' },
+  ];
+
+  for (const c of cases) {
+    it(`${c.type} is VERIFIED at line ${c.line}`, () => {
+      const finding = {
+        type: c.type, severity: 'HIGH', confidence: 'HIGH',
+        file: 'security-issues.js', line: c.line, evidence: c.evidence,
+        explanation: 'test',
+      };
+      const result = validateFinding(finding, FIXTURES);
+      expect(result.status).toBe('VERIFIED');
+    });
+  }
+
+  it('a fabricated security finding (wrong evidence) is UNVERIFIED', () => {
+    const finding = {
+      type: 'COMMAND_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+      file: 'security-issues.js', line: 23,
+      evidence: 'spawn("zzz_totally_not_here_9999", args);',
+      explanation: 'fabricated',
+    };
+    expect(validateFinding(finding, FIXTURES).status).toBe('UNVERIFIED');
+  });
+});
+
+// ─── Test 61 — full pipeline: mixed security findings dedup + verify ──────────
+
+describe('Test 61 — Security findings through dedup + validation', () => {
+  const findings = [
+    { type: 'COMMAND_INJECTION', severity: 'CRITICAL', confidence: 'HIGH', file: 'security-issues.js', line: 23, evidence: "exec('ping -c 1 ' + host, (e, out) => res.send(out));", explanation: 'a' },
+    { type: 'WEAK_HASH',         severity: 'MEDIUM',   confidence: 'HIGH', file: 'security-issues.js', line: 48, evidence: "return crypto.createHash('md5').update(pw).digest('hex');", explanation: 'b' },
+  ];
+
+  it('both verify through the merge pipeline', () => {
+    const merged = runPipelineWithMockFindings(findings, FIXTURES);
+    expect(merged).toHaveLength(2);
+    merged.forEach(f => expect(f.verification.status).toBe('VERIFIED'));
+  });
+
+  it('a security finding stays primary when a quality finding overlaps it', () => {
+    const out = dedupeFindings([
+      { type: 'MAGIC_NUMBER',      severity: 'HIGH', confidence: 'HIGH', file: 'security-issues.js', line: 23 },
+      { type: 'COMMAND_INJECTION', severity: 'LOW',  confidence: 'LOW',  file: 'security-issues.js', line: 23 },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe('COMMAND_INJECTION');
+    expect(out[0].alsoFlaggedAs).toEqual(['MAGIC_NUMBER']);
+  });
+});
+
+// ─── Test 62 — reporter groups security findings by their category ────────────
+
+describe('Test 62 — Reporter groups security findings by category', () => {
+  const result = makeReviewResult({
+    findings: [
+      { type: 'COMMAND_INJECTION', severity: 'CRITICAL', confidence: 'HIGH', file: 'security-issues.js', line: 23, evidence: 'x', explanation: 'y', verification: { status: 'VERIFIED', file: 'security-issues.js', line: 23, sourceLine: 'x' } },
+      { type: 'WEAK_HASH',         severity: 'MEDIUM',   confidence: 'HIGH', file: 'security-issues.js', line: 48, evidence: 'x', explanation: 'y', verification: { status: 'VERIFIED', file: 'security-issues.js', line: 48, sourceLine: 'x' } },
+    ],
+    genesisAvailable: false, llmUsed: true, error: null, durationMs: 300,
+  });
+
+  it('renders distinct security categories (Injection, Cryptography)', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('Security: Injection');
+    expect(body).toContain('Security: Cryptography');
+  });
+
+  it('breakdown counts each security category separately', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('Security: Injection: 1');
+    expect(body).toContain('Security: Cryptography: 1');
   });
 });

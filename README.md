@@ -7,7 +7,7 @@ Pull Request and posts its findings back as a PR comment. It runs two analysis
 agents over the diff and verifies every finding against the actual source before
 reporting it:
 
-- **Security Agent** — SQL Injection and Hardcoded Secrets.
+- **Security Agent** — a full security catalog: injection (SQL, command, code, etc.), web (XSS, CSRF, CORS…), secrets, cryptography, files/resources (path traversal, SSRF, deserialization…), data exposure, and configuration. Auth and API checks are available but off by default. Category-toggleable.
 - **Quality Agent** — code-quality checks (dead code, duplication, logic errors,
   bug risks, error handling, maintainability, performance, API/contract). The
   Quality Agent is enabled by default and can be disabled or tuned per category.
@@ -116,9 +116,13 @@ Copy `.env.example` to `.env.local` for local development. Do **not** commit
 | `REVIEW_REPO_ROOT` | No | Root of the repository being reviewed. Set by the workflow to the checkout path; defaults to the current working directory locally. |
 | `GITHUB_TOKEN` | Only for `--report-to-pr` | Token used to post the PR comment. Provided automatically by GitHub Actions. |
 | `PR_NUMBER`, `PR_REPO_OWNER`, `PR_REPO_NAME` | Only for `--report-to-pr` | Identify which PR to comment on. |
+| `AI_REVIEW_ENABLE_SECURITY` | No | Master switch for the Security Agent (default on). `false`/`0`/`no`/`off` runs quality only. |
+| `AI_REVIEW_SECURITY_CATEGORIES` | No | Comma allow-list — run only these security categories. |
+| `AI_REVIEW_DISABLE_SECURITY_CATEGORIES` | No | Comma list — remove security categories from the default set. |
+| `AI_REVIEW_SECURITY_MIN_SEVERITY` | No | Drop security findings below this severity (`LOW`\|`MEDIUM`\|`HIGH`\|`CRITICAL`; default `LOW`). |
 | `AI_REVIEW_ENABLE_QUALITY` | No | Master switch for the Quality Agent (default on). `false`/`0`/`no`/`off` runs security only. |
 | `AI_REVIEW_QUALITY_CATEGORIES` | No | Comma allow-list — run only these quality categories. |
-| `AI_REVIEW_DISABLE_CATEGORIES` | No | Comma list — remove categories from the default set. |
+| `AI_REVIEW_DISABLE_CATEGORIES` | No | Comma list — remove quality categories from the default set. |
 | `AI_REVIEW_QUALITY_MIN_SEVERITY` | No | Drop quality findings below this severity (`LOW`\|`MEDIUM`\|`HIGH`\|`CRITICAL`; default `LOW`). |
 | `AI_REVIEW_MAX_DIFF_CHARS` | No | Diff section limit (default 8000). |
 | `AI_REVIEW_MAX_SOURCE_CONTEXT_CHARS` | No | Source-context limit (default 12000). |
@@ -134,19 +138,31 @@ never set.
 
 ## Current security checks
 
-The Security Agent detects two vulnerability classes today:
+The Security Agent runs a catalog of checks grouped into toggleable categories
+(single source of truth: `src/agents/securityCatalog.js`):
 
-- **SQL Injection (`SQL_INJECTION`)** — user-controlled input concatenated or
-  interpolated directly into a SQL string without parameterisation. Parameterised
-  queries, prepared statements, and static SQL are treated as safe.
-- **Hardcoded Secrets (`HARDCODED_SECRET`)** — real credential literals in source
-  (API keys, tokens, passwords, private keys, connection strings). Environment
-  reads (`process.env.*`) and obvious placeholders (`YOUR_API_KEY`, etc.) are not
-  flagged.
+| Category | Default | Examples |
+|---|---|---|
+| Injection | on | SQL, NoSQL, command, code (`eval`), LDAP, XPath, template, header, log injection |
+| Web / client-side | on | XSS, open redirect, CSRF, clickjacking, insecure CORS, postMessage misuse |
+| Secrets & credentials | on | hardcoded secrets, secrets in logs/URLs, weak crypto keys |
+| Cryptography | on | weak hash (MD5/SHA1), weak cipher, insecure random, disabled TLS validation |
+| Files & resources | on | path traversal, SSRF, unrestricted upload, zip slip, XXE, insecure deserialization, ReDoS |
+| Data exposure | on | sensitive data / verbose errors, mass assignment, PII logging |
+| Configuration | on | insecure config, missing security headers, dangerous permissions, supply-chain risk |
+| Auth / access control | **off** | missing auth, broken access control (IDOR), insecure JWT/session, weak password policy |
+| API / GraphQL | **off** | missing rate limit, GraphQL introspection, excessive data exposure |
 
-Every finding is passed through the Evidence Validator, which confirms the file
-exists, the line is within range, and the reported evidence appears in the
-source. See [docs/security-agent.md](docs/security-agent.md).
+`auth` and `api` are off by default because they need whole-handler/endpoint
+context and are more prone to false positives; enable them per repo when wanted.
+Categories, an allow-list, a disable-list, and a severity floor are all
+configurable via environment variables (see below).
+
+**Dependency/CVE scanning is intentionally out of scope** for the LLM — use a
+dedicated scanner (npm audit / OSV / Dependabot). Every finding is passed
+through the Evidence Validator, which confirms the file exists, the line/range is
+valid, and the reported evidence appears in the source. See
+[docs/security-agent.md](docs/security-agent.md).
 
 ---
 
@@ -169,9 +185,11 @@ For details see [docs/testing.md](docs/testing.md).
 
 ## Documentation
 
+- [docs/checks.md](docs/checks.md) — the complete list of security and quality checks, with defaults and config.
 - [docs/architecture.md](docs/architecture.md) — MVP architecture, components, two-repo setup, current vs future.
 - [docs/context-management.md](docs/context-management.md) — the whole-file problem, the request-size issue, and the bounded-context solution.
-- [docs/security-agent.md](docs/security-agent.md) — Security Agent, the two checks, false-positive handling, and the validator.
+- [docs/security-agent.md](docs/security-agent.md) — Security Agent, the full check catalog, category config, false-positive handling, and the validator.
+- [docs/quality-agent.md](docs/quality-agent.md) — Quality Agent, the code-quality catalog, category config, range findings, and the validator.
 - [docs/testing.md](docs/testing.md) — test suite, cases, CI, and latest results.
 - [CHANGELOG.md](CHANGELOG.md) — notable changes during MVP development.
 - [integration.md](integration.md) — how a caller repository connects to the engine.
