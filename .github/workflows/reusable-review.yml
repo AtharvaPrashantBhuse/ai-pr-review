@@ -131,6 +131,43 @@ jobs:
         run:  npm ci --prefer-offline
         working-directory: _ai_review_engine
 
+      # ── 4a. Checkout the Genesis toolkit ──────────────────────────────────
+      # Genesis is an optional repository-intelligence tool. It is checked out
+      # into a subdirectory so it never touches the caller's or engine's code.
+      # It is dependency-free (Node >= 18) so no install step is required.
+      - name: Checkout Genesis toolkit
+        uses: actions/checkout@v4
+        with:
+          repository: ayush488-glitch/genesis-kit
+          path:        _genesis_kit
+          # Public repository — no token needed. Provide a PAT here if it is
+          # ever made private.
+
+      # ── 4b. Register the Genesis CLI wrapper ──────────────────────────────
+      # The engine's genesisAdapter locates the toolkit by reading a wrapper at
+      # ~/.local/bin/genesis that points to tools/genesis.mjs. We create that
+      # wrapper here so the adapter can discover the checked-out toolkit.
+      - name: Register Genesis CLI wrapper
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          TOOLS_DIR="$GITHUB_WORKSPACE/_genesis_kit/tools"
+          printf '#!/usr/bin/env bash\nnode "%s/genesis.mjs" "$@"\n' "$TOOLS_DIR" > "$HOME/.local/bin/genesis"
+          chmod +x "$HOME/.local/bin/genesis"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # ── 4c. Build the Genesis index for the CALLER repository ─────────────
+      # The engine looks for .genesis/index/graph.json inside the repository
+      # being reviewed (the caller checkout at $GITHUB_WORKSPACE). We build it
+      # fresh here so Genesis reflects the exact PR state, not a stale snapshot.
+      # This step is best-effort: if indexing fails, the review still runs
+      # without Genesis context (the engine degrades gracefully).
+      - name: Build Genesis index for caller repository
+        continue-on-error: true
+        run: |
+          node "$GITHUB_WORKSPACE/_genesis_kit/tools/genesis.mjs" index "$GITHUB_WORKSPACE" \
+            && echo "Genesis index built at $GITHUB_WORKSPACE/.genesis/index" \
+            || echo "Genesis indexing failed — the review will run without Genesis context."
+
       # ── 5. Identify changed files in the caller's PR ──────────────────────
       - name: Get changed files
         id:   changed-files
