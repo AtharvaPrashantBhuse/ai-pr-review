@@ -23,7 +23,7 @@
  *     ↓
  *   contextBuilder               — bounded diff + source context + Genesis
  *     ↓
- *   securityAgent                — LLM finds potential SQL Injection
+ *   securityAgent + qualityAgent — LLM finds security + code-quality issues
  *     ↓
  *   evidenceValidator            — deterministic source verification
  *     ↓
@@ -54,11 +54,15 @@ import { makeReviewResult, makeErrorResult }       from './reviewResult.js';
 import { buildContext }                            from './contextBuilder.js';
 import { getContextForFiles, isGenesisAvailable }  from '../genesis/genesisAdapter.js';
 import { analyseForSecurity }                      from '../agents/securityAgent.js';
+import { analyseForQuality }                        from '../agents/qualityAgent.js';
+import { resolveQualityConfig }                     from '../agents/checkCatalog.js';
 import { validateFindings }                        from '../validation/evidenceValidator.js';
 import { DEFAULT_MODEL }                           from '../integrations/groq.js';
 
 // Extensions the engine will review
 const REVIEWABLE_EXTS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -145,25 +149,66 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
   console.log(`[AI-Review] Genesis context chars: ${diagnostics.genesisChars}`);
   console.log(`[AI-Review] User prompt chars:     ${diagnostics.combinedChars}`);
 
-  // ── Step 3: Security Agent ────────────────────────────────────────────────
-  const agentResult = await analyseForSecurity(combined, '');
-  // Note: Genesis context is already embedded in `combined` by buildContext.
-  // We pass an empty string as the second arg to avoid double-including it.
+  // ── Step 3: Analysis agents ───────────────────────────────────────────────
+  // Both agents run over the SAME bounded context. Genesis context is already
+  // embedded in `combined` by buildContext, so we pass an empty second arg to
+  // each agent to avoid double-including it.
+  //
+  // The quality agent runs the enabled subset of the check catalog, controlled
+  // by AI_REVIEW_ENABLE_QUALITY plus the per-category toggles. The two agent
+  // calls are independent, so they run in parallel.
+  const qualityConfig  = resolveQualityConfig();
+  const qualityEnabled = qualityConfig.enabled && qualityConfig.enabledTypes.size > 0;
 
-  if (!agentResult.llmUsed) {
+  if (qualityEnabled) {
+    console.log(
+      `[AI-Review] Quality categories:   ${[...qualityConfig.enabledCategories].join(', ')}`
+    );
+    console.log(`[AI-Review] Quality min severity: ${qualityConfig.minSeverity}`);
+  } else {
+    console.log('[AI-Review] Quality agent:        disabled');
+  }
+
+  const [securityResult, qualityResult] = await Promise.all([
+    analyseForSecurity(combined, ''),
+    qualityEnabled
+      ? analyseForQuality(combined, '', { config: qualityConfig })
+      : Promise.resolve(null),
+  ]);
+
+  // The review is considered to have used the LLM if either agent did.
+  const llmUsed = securityResult.llmUsed || Boolean(qualityResult?.llmUsed);
+
+  // If no agent produced a usable LLM result, surface the error and stop.
+  if (!llmUsed) {
+    const error = securityResult.error || qualityResult?.error || 'LLM analysis unavailable.';
     return makeReviewResult({
       findings:         [],
       genesisAvailable,
       llmUsed:          false,
-      error:            agentResult.error,
+      error,
       durationMs:       Date.now() - start,
     });
   }
 
+  // Merge findings from every agent that ran successfully.
+  const rawFindings = [
+    ...securityResult.findings,
+    ...(qualityResult?.findings || []),
+  ];
+
+  // Combine agent errors (e.g. one agent hit a rate limit but the other worked)
+  // into a single non-fatal note so the caller still gets partial results.
+  const agentErrors = [securityResult.error, qualityResult?.error]
+    .filter(Boolean);
+  const combinedError = agentErrors.length > 0 ? agentErrors.join(' | ') : null;
+
   // ── Step 4: Evidence Validator ────────────────────────────────────────────
   // The validator reads the actual checked-out source on disk — it is
   // intentionally NOT limited to the context window sent to the LLM.
-  const validatedPairs = validateFindings(agentResult.findings, effectiveRoot);
+  // Every finding — security or quality — passes through the same
+  // deterministic verification. LLM confidence alone is never sufficient.
+  const validatedPairs = validateFindings(rawFindings, effectiveRoot);
 
   // ── Step 5: Merge findings with validation results ────────────────────────
   const findings = validatedPairs.map(({ finding, validation }) => ({
@@ -175,7 +220,7 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
     findings,
     genesisAvailable,
     llmUsed:    true,
-    error:      agentResult.error || null,
+    error:      combinedError,
     durationMs: Date.now() - start,
   });
 }

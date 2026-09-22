@@ -11,7 +11,8 @@
     "test":             "vitest run",
     "test:watch":       "vitest",
     "ai-review":        "node src/cli/index.js",
-    "ai-review:test":   "node src/cli/index.js fixtures/vulnerable.js"
+    "ai-review:test":   "node src/cli/index.js fixtures/vulnerable.js",
+    "smoke":            "node scripts/smoke-test.js"
   },
   "dependencies": {
     "dotenv":  "16.4.5",

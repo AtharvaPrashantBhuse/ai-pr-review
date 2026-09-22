@@ -16,8 +16,16 @@
  * is marked UNVERIFIED — LLM confidence alone is never sufficient.
  *
  * Result shapes:
- *   VERIFIED:   { status: "VERIFIED",   file, line, sourceLine }
- *   UNVERIFIED: { status: "UNVERIFIED", file, line, reason }
+ *   VERIFIED:   { status: "VERIFIED",   file, line, sourceLine, [endLine] }
+ *   UNVERIFIED: { status: "UNVERIFIED", file, line, reason,     [endLine] }
+ *
+ * Range (multi-line) findings:
+ *   A finding may include an `endLine`. When it does, the validator treats the
+ *   finding as spanning line..endLine and searches that whole span (plus the
+ *   context window) for the evidence. This lets duplication blocks, over-long
+ *   functions, and other multi-line constructs be VERIFIED instead of being
+ *   forced UNVERIFIED by a single-line check. Single-line findings (no endLine)
+ *   behave exactly as before.
  *
  * Evidence matching strategy (three levels, any one is sufficient):
  *   1. Exact normalised match (whitespace-collapsed, lowercased).
@@ -60,6 +68,13 @@ function resolveDefaultRepoRoot() {
 export function validateFinding(finding, repoRoot = resolveDefaultRepoRoot()) {
   const { file, line, evidence } = finding;
 
+  // endLine marks a range (multi-line) finding — e.g. a duplicated block or an
+  // over-long function. When present and valid, verification searches the whole
+  // claimed span (plus the context window) for the evidence rather than a single
+  // line. When absent, behaviour is identical to the original single-line check.
+  const endLineRaw = parseInt(finding.endLine, 10);
+  const hasRange   = Number.isFinite(endLineRaw) && endLineRaw > (parseInt(line, 10) || 0);
+
   // ── Check 1: file field present ──────────────────────────────────────────
   if (!file || typeof file !== 'string') {
     return unverified(file, line, 'Finding has no file field.');
@@ -95,17 +110,57 @@ export function validateFinding(finding, repoRoot = resolveDefaultRepoRoot()) {
     );
   }
 
-  // ── Check 4: evidence exists in source around the claimed line ────────────
+  // ── Check 4: evidence exists in source around the claimed line/range ──────
   if (!evidence || !evidence.trim()) {
     return unverified(file, line, 'Finding has no evidence to verify against source.');
   }
 
+  const evidenceNorm    = normalise(evidence);
+  const exactSourceLine = sourceLines[claimedLine - 1];   // 1-based → 0-based
+
+  if (hasRange) {
+    // Range finding: clamp endLine to the file, then search the whole span
+    // (with padding) for the evidence. The end line must be within the file —
+    // a claimed span that runs past EOF is a fabrication signal.
+    const claimedEnd = endLineRaw;
+    if (claimedEnd > totalLines) {
+      return unverified(
+        file,
+        line,
+        `Range end line ${claimedEnd} does not exist — file only has ${totalLines} lines.`,
+        claimedEnd
+      );
+    }
+
+    const windowStart = Math.max(0, claimedLine - 1 - CONTEXT_WINDOW);
+    const windowEnd   = Math.min(totalLines - 1, claimedEnd - 1 + CONTEXT_WINDOW);
+    const windowLines = sourceLines.slice(windowStart, windowEnd + 1);
+
+    const matched = windowLines.some(srcLine => evidenceMatches(evidenceNorm, normalise(srcLine)));
+
+    if (!matched) {
+      return unverified(
+        file,
+        line,
+        `Evidence not found within claimed range ${claimedLine}-${claimedEnd}. ` +
+        `Claimed: "${evidence.substring(0, 120)}".`,
+        claimedEnd
+      );
+    }
+
+    return {
+      status:     'VERIFIED',
+      file,
+      line:       claimedLine,
+      endLine:    claimedEnd,
+      sourceLine: exactSourceLine.trim(),
+    };
+  }
+
+  // Single-line finding (default path — unchanged behaviour).
   const windowStart = Math.max(0, claimedLine - 1 - CONTEXT_WINDOW);
   const windowEnd   = Math.min(totalLines - 1, claimedLine - 1 + CONTEXT_WINDOW);
   const windowLines = sourceLines.slice(windowStart, windowEnd + 1);
-
-  const evidenceNorm    = normalise(evidence);
-  const exactSourceLine = sourceLines[claimedLine - 1];   // 1-based → 0-based
 
   const matched = windowLines.some(srcLine => evidenceMatches(evidenceNorm, normalise(srcLine)));
 
@@ -149,8 +204,10 @@ export function validateFindings(findings, repoRoot = resolveDefaultRepoRoot()) 
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function unverified(file, line, reason) {
-  return { status: 'UNVERIFIED', file, line, reason };
+function unverified(file, line, reason, endLine = null) {
+  const result = { status: 'UNVERIFIED', file, line, reason };
+  if (endLine != null) result.endLine = endLine;
+  return result;
 }
 
 /**

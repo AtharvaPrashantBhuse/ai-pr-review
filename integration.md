@@ -1,6 +1,11 @@
-# Integration Guide — AI PR Security Review
+# Integration Guide — AI PR Code Review
 
-How to connect any GitHub repository to the `ai-pr-review` engine for automated SQL Injection detection on every Pull Request.
+How to connect any GitHub repository to the `ai-pr-review` engine for automated code review on every Pull Request.
+
+The engine runs two analysis agents over the changed code:
+
+- **Security Agent** — SQL Injection and Hardcoded Secrets.
+- **Quality Agent** — a full code-quality catalog: correctness (logic errors, bug risks), dead code, duplication, error handling, maintainability (complexity, naming, magic numbers, docs), performance, and API/contract. Style and test-coverage checks are available but off by default. Category-toggleable; disable entirely with `AI_REVIEW_ENABLE_QUALITY=false`.
 
 ---
 
@@ -20,7 +25,7 @@ Your repository
          1. Checkout your repository at the PR branch
          2. Fetch the PR diff from the GitHub API
          3. Build bounded LLM context  ←  context-size fix
-         4. Security Agent → Groq/LLM → SQL Injection findings
+         4. Security Agent + Quality Agent → Groq/LLM → findings
          5. Evidence Validator → VERIFIED / UNVERIFIED
          6. GitHub Reporter → PR comment on YOUR repository
 ```
@@ -113,7 +118,7 @@ Two files are written:
 
 Deleted files and non-JS/TS files are excluded. Binary files or files too large for a patch are skipped with a warning.
 
-### Step 5 — Run the security review
+### Step 5 — Run the code review
 
 ```bash
 node _ai_review_engine/src/cli/index.js \
@@ -125,7 +130,7 @@ The engine receives the PR diff, not entire source files. The context builder ex
 
 ### Step 6 — Post the PR comment
 
-If findings are detected, a formatted comment is posted on your PR. If no issues are found, a clean "No SQL Injection findings detected" comment is posted.
+If findings are detected, a formatted comment is posted on your PR. If no issues are found, a clean "No security or code-quality findings detected" comment is posted.
 
 ---
 
@@ -188,7 +193,12 @@ These are set automatically by the reusable workflow. You do not need to set the
 | Variable | Set by | Purpose |
 |---|---|---|
 | `GROQ_API_KEY` | Caller secret | LLM inference — required |
-| `GROQ_SECURITY_MODEL` | Optional override | Override the default Groq model |
+| `GROQ_SECURITY_MODEL` | Optional override | Override the Groq model for security analysis |
+| `GROQ_QUALITY_MODEL` | Optional override | Override the Groq model for quality analysis (falls back to `GROQ_SECURITY_MODEL`) |
+| `AI_REVIEW_ENABLE_QUALITY` | Optional | Master switch for the Quality Agent (default on; `false`/`0`/`no`/`off` to disable) |
+| `AI_REVIEW_QUALITY_CATEGORIES` | Optional | Comma allow-list — run **only** these quality categories |
+| `AI_REVIEW_DISABLE_CATEGORIES` | Optional | Comma list — remove categories from the default-on set |
+| `AI_REVIEW_QUALITY_MIN_SEVERITY` | Optional | Drop quality findings below this severity (`LOW`\|`MEDIUM`\|`HIGH`\|`CRITICAL`; default `LOW`) |
 | `REVIEW_REPO_ROOT` | Reusable workflow | Absolute path to the checked-out caller repository |
 | `GITHUB_TOKEN` | Reusable workflow | Posts the PR comment on the caller repository |
 | `PR_NUMBER` | Reusable workflow | Identifies which PR to comment on |
@@ -196,6 +206,37 @@ These are set automatically by the reusable workflow. You do not need to set the
 | `PR_REPO_NAME` | Reusable workflow | Repository name for the PR comment |
 | `HTTPS_PROXY` / `HTTP_PROXY` | Optional | Corporate proxy (TLS verification stays enabled) |
 | `NODE_EXTRA_CA_CERTS` | Optional | Path to corporate CA certificate (e.g. Zscaler) |
+
+---
+
+## Tuning the code-quality review
+
+The Quality Agent covers a catalog of categories. On-by-default: `correctness`,
+`dead_code`, `duplication`, `error_handling`, `maintainability`, `performance`,
+`api_contract`. Off-by-default (subjective / need whole-PR context): `style`,
+`test_coverage`.
+
+Tune it from the caller workflow's review step without touching the engine:
+
+```yaml
+    - name: Run AI Security Review
+      env:
+        # Only the highest-signal categories, MEDIUM and above
+        AI_REVIEW_QUALITY_CATEGORIES: "correctness,error_handling,performance"
+        AI_REVIEW_QUALITY_MIN_SEVERITY: "MEDIUM"
+```
+
+Or keep the defaults but drop a noisier category:
+
+```yaml
+    - name: Run AI Security Review
+      env:
+        AI_REVIEW_DISABLE_CATEGORIES: "maintainability"
+```
+
+Multi-line findings (duplication, over-long functions, N+1 loops) are reported
+as a line **range** and verified against the whole span on disk. A range that
+runs past end-of-file is rejected as UNVERIFIED.
 
 ---
 
@@ -255,6 +296,10 @@ npm run ai-review:test
 
 # Run the full test suite (no GROQ_API_KEY required — fully mocked)
 npm test
+
+# Live smoke test against the fixtures (REAL Groq calls; needs GROQ_API_KEY).
+# No-ops safely when the key is absent, so it is safe to run unconditionally.
+npm run smoke
 ```
 
 To review a specific repository checkout, set `REVIEW_REPO_ROOT`:
@@ -294,34 +339,41 @@ This means the LLM can now work from a bounded context window (the PR diff + tar
 
 ## Genesis integration (optional)
 
-If the caller repository has a `.genesis/index` directory committed, the engine will use it to provide additional repository context (symbols, import relationships, blast radius) to the Security Agent.
+If the caller repository has a `.genesis/index` directory committed, the engine will use it to provide additional repository context (symbols, import relationships, blast radius) to **both** the Security Agent and the Quality Agent.
 
-Genesis context is bounded to `AI_REVIEW_MAX_GENESIS_CONTEXT_CHARS` (default 4 000 chars) before being included in the prompt. If Genesis is not present, the engine runs without it — it is not required.
+This context matters most for the cross-file quality checks:
+
+- **`API_CONTRACT`** — the blast radius (which files import a changed symbol) lets the Quality Agent judge whether a signature/return-shape change will actually break dependents, and scale severity accordingly.
+- **`TEST_COVERAGE`** — the exported-symbol list helps identify new non-trivial functions that lack a corresponding test.
+
+Genesis context is bounded to `AI_REVIEW_MAX_GENESIS_CONTEXT_CHARS` (default 4 000 chars) before being included in the prompt. If Genesis is not present, the engine still runs — these checks then operate only on what is visible in the diff, and the rest of the catalog is unaffected.
 
 ---
 
 ## PR comment format
 
-Example comment when a vulnerability is found:
+Example comment when findings are detected (one security, one quality):
 
 ```
-## 🔐 AI Security Review
+## 🤖 AI Code Review
 
-| | |
-|---|---|
-| **Findings** | 1 (1 verified) |
-| **Model** | openai/gpt-oss-20b |
-| **Genesis** | ✗ not available |
+> **Powered by:** Genesis · Security Agent · Quality Agent · Groq/LLM · Evidence Validator
+
+**Findings: 2** (2 verified ✅ · 0 unverified ❌)
+
+🔐 Security: 1 · 🧹 Code Quality: 1
 
 ---
 
-### 🔴 Finding #1 — SQL_INJECTION (HIGH)
+### Finding 1: SQL_INJECTION
 
-| Field | Value |
-|---|---|
-| **File** | src/api/users.js |
-| **Line** | 42 |
+| Field          | Value |
+|----------------|-------|
+| **Category**   | 🔐 Security |
+| **Severity**   | 🟠 HIGH |
 | **Confidence** | HIGH |
+| **File**       | `src/api/users.js` |
+| **Line**       | 42 |
 | **Verification** | ✅ VERIFIED |
 
 **Evidence**
@@ -329,16 +381,39 @@ Example comment when a vulnerability is found:
 const sql = 'SELECT * FROM users WHERE id = ' + userId;
 \`\`\`
 
-**Explanation**  
+**Explanation**
+
 User input from `req.query.userId` is concatenated directly into the SQL string without parameterisation. An attacker can inject arbitrary SQL.
+
+---
+
+### Finding 2: LOGIC_ERROR
+
+| Field          | Value |
+|----------------|-------|
+| **Category**   | 🧹 Code Quality |
+| **Severity**   | 🟠 HIGH |
+| **Confidence** | HIGH |
+| **File**       | `src/auth/roles.js` |
+| **Line**       | 12 |
+| **Verification** | ✅ VERIFIED |
+
+**Evidence**
+\`\`\`
+if (user.role = 'admin') {
+\`\`\`
+
+**Explanation**
+
+Assignment (`=`) is used where a comparison (`===`) was intended. The condition always assigns and evaluates truthy, so every user is treated as an admin.
 ```
 
 When no findings are detected:
 
 ```
-## 🔐 AI Security Review
+## 🤖 AI Code Review
 
-✅ No SQL Injection findings detected in this PR.
+✅ No security or code-quality findings detected in the changed files.
 ```
 
 ---

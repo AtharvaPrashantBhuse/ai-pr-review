@@ -52,6 +52,14 @@
  */
 
 import { getClient, isGroqAvailable, DEFAULT_MODEL } from '../integrations/groq.js';
+import { parseFindings }                             from './findingParser.js';
+
+// Re-export the shared parser so existing importers of
+// `securityAgent.parseFindings` keep working unchanged.
+export { parseFindings };
+
+// Finding types this agent may emit
+export const SECURITY_TYPES = new Set(['SQL_INJECTION', 'HARDCODED_SECRET']);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // System prompt
@@ -246,54 +254,6 @@ function buildUserPrompt(diff, repoContext) {
   return prompt;
 }
 
-/**
- * Parse and normalise the raw LLM response into a validated findings array.
- *
- * The LLM sometimes wraps its JSON in markdown code fences — we strip those.
- * Fields are coerced to their expected types and invalid enum values are
- * replaced with safe defaults so downstream code never sees unexpected shapes.
- *
- * @param {string} raw - Raw text response from the LLM
- * @returns {Array}    - Normalised findings array (may be empty)
- */
-export function parseFindings(raw) {
-  let text = (raw || '').trim();
-
-  // Strip markdown code fences  (```json ... ``` or ``` ... ```)
-  if (text.startsWith('```')) {
-    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    // Try to extract a JSON array embedded in surrounding prose
-    const match = text.match(/\[[\s\S]*\]/);
-    if (match) {
-      try { parsed = JSON.parse(match[0]); } catch { return []; }
-    } else {
-      return [];
-    }
-  }
-
-  if (!Array.isArray(parsed)) return [];
-
-  const VALID_SEVERITY   = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
-  const VALID_CONFIDENCE = new Set(['LOW', 'MEDIUM', 'HIGH']);
-
-  return parsed
-    .filter(f => f && typeof f === 'object')
-    .map(f => ({
-      type:        String(f.type        || 'UNKNOWN').toUpperCase(),
-      severity:    VALID_SEVERITY.has(String(f.severity   || '').toUpperCase())
-                     ? String(f.severity).toUpperCase()    : 'LOW',
-      confidence:  VALID_CONFIDENCE.has(String(f.confidence || '').toUpperCase())
-                     ? String(f.confidence).toUpperCase()  : 'LOW',
-      file:        String(f.file        || 'unknown'),
-      line:        parseInt(f.line, 10) || 0,
-      evidence:    String(f.evidence    || ''),
-      explanation: String(f.explanation || ''),
-    }))
-    .filter(f => f.type && f.file);
-}
+// parseFindings is provided by ./findingParser.js and re-exported at the top
+// of this module. The Security Agent additionally restricts results to the
+// SECURITY_TYPES it owns where relevant.

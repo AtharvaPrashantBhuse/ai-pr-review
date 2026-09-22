@@ -87,8 +87,8 @@ for (let i = 0; i < args.length; i++) {
 function printBanner() {
   console.log('');
   console.log('╔══════════════════════════════════════════════════════╗');
-  console.log('║           AI PR SECURITY REVIEW                     ║');
-  console.log('║   Genesis · Security Agent · Groq/LLM · Validator   ║');
+  console.log('║              AI PR CODE REVIEW                      ║');
+  console.log('║  Genesis · Security · Quality · Groq/LLM · Validator ║');
   console.log('╚══════════════════════════════════════════════════════╝');
   console.log('');
 }
@@ -108,7 +108,7 @@ function printFileResult(label, result) {
   if (error) console.log(`  ⚠  Error          : ${error}`);
 
   if (findings.length === 0) {
-    console.log('  ✅ No security findings.');
+    console.log('  ✅ No findings.');
     return;
   }
 
@@ -123,7 +123,7 @@ function printFileResult(label, result) {
     console.log(`    Severity     : ${icon} ${f.severity}`);
     console.log(`    Confidence   : ${f.confidence}`);
     console.log(`    File         : ${f.file}`);
-    console.log(`    Line         : ${f.line}`);
+    console.log(`    Line         : ${f.endLine && f.endLine > f.line ? `${f.line}-${f.endLine}` : f.line}`);
     console.log(`    Evidence     : ${f.evidence}`);
     console.log(`    Explanation  : ${f.explanation}`);
     console.log(`    Verification : ${verify}`);

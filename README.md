@@ -1,305 +1,187 @@
 # ai-pr-review
 
-**Central AI Pull Request Security Review Engine**
+**Central AI Pull Request Review Engine**
 
-Reusable, repository-independent engine for automated SQL Injection detection in Pull Requests. Powered by [Genesis](https://github.com/your-org/genesis-kit) for repository intelligence, [Groq](https://console.groq.com) for LLM inference, and a deterministic Evidence Validator that never trusts LLM output alone.
+A reusable, repository-independent engine that reviews the changed code in a
+Pull Request and posts its findings back as a PR comment. It runs two analysis
+agents over the diff and verifies every finding against the actual source before
+reporting it:
+
+- **Security Agent** — SQL Injection and Hardcoded Secrets.
+- **Quality Agent** — code-quality checks (dead code, duplication, logic errors,
+  bug risks, error handling, maintainability, performance, API/contract). The
+  Quality Agent is enabled by default and can be disabled or tuned per category.
+
+The engine uses [Groq](https://console.groq.com) for LLM inference and a
+deterministic **Evidence Validator** that never trusts LLM output alone — a
+finding is only reported as VERIFIED when it matches the checked-out source.
+
+> **Genesis status:** Genesis repository intelligence is an *optional* input.
+> It is only used when a `.genesis/index` is present in the repository under
+> review. It is **not present in this repository**, so the engine currently
+> runs without Genesis context. See [docs/architecture.md](docs/architecture.md).
 
 ---
 
-## Why two repositories?
+## Project purpose
 
-| Repository | Role |
-|---|---|
-| **`ai-pr-review`** (this repo) | Central AI review engine — Security Agent, Genesis adapter, Groq integration, Evidence Validator, GitHub Reporter, reusable workflow |
-| **`ai-pr-review-demo`** | Small demo/test application — calls this engine via GitHub Actions `workflow_call` |
-| **`abcd-web-projecttracker`** | Existing application — can call this same engine via a one-line workflow addition |
+Automate the first pass of peer code review on every Pull Request:
 
-The engine lives in exactly one place. Any repository that wants AI security review adds a small caller workflow — it does not copy the engine.
+- Detect real, exploitable **SQL Injection** and exposed **Hardcoded Secrets**.
+- Surface common **code-quality** problems in the changed code.
+- Keep the review **trustworthy** by verifying each finding against source, so
+  a confident-but-wrong LLM claim is downgraded to UNVERIFIED rather than
+  reported as fact.
+- Live in **one** central repository that any number of other repositories can
+  call, instead of copying review code into each project.
 
 ---
 
-## Architecture
+## Current MVP flow
 
 ```
-         ai-pr-review-demo  (or any other repository)
-              |
-           PR raised
-              |
-              v
-       GitHub Actions
-              |
-              | workflow_call
-              v
-         ai-pr-review  ◄── THIS REPOSITORY
-              |
-    ┌─────────┼──────────┐
-    v         v          v
- Genesis   Security    GitHub
- Adapter    Agent      Reporter
-              |
-              v
-           Groq API
-              |
-              v
-        Configured LLM
-              |
-              v
-      Raw SQL Injection
-         Findings
-              |
-              v
-    Evidence Validator
-     (deterministic,
-      no LLM used)
-              |
-              v
-      VERIFIED / UNVERIFIED
-              |
-              v
-   ai-pr-review-demo PR comment
+Pull Request (caller repository)
+      │
+      ▼
+GitHub Actions  →  reusable workflow (reusable-review.yml)
+      │
+      ├─ checkout caller repo + PR diff (pr-diff.txt)
+      ▼
+Review Engine (src/core/reviewEngine.js)
+      │
+      ▼
+Context Builder      → bounded prompt (PR diff + targeted source context)
+      │
+      ▼
+Security Agent + Quality Agent  → Groq / LLM  → structured findings
+      │
+      ▼
+Evidence Validator   → VERIFIED / UNVERIFIED (deterministic, no LLM)
+      │
+      ▼
+GitHub Reporter      → PR comment on the caller repository
 ```
 
-### Component responsibilities
-
-| Component | Responsibility |
-|---|---|
-| **Genesis Adapter** | Repository intelligence — symbols, imports, dependencies, blast-radius. Provides context to the Security Agent. NOT a vulnerability detector. |
-| **Security Agent** | Security analysis — sends changed code + Genesis context to the LLM, receives structured findings. |
-| **Groq** | LLM inference/API infrastructure — the HTTP layer between the Security Agent and the configured language model. |
-| **LLM** | Generates potential SQL Injection findings in structured JSON format. |
-| **Evidence Validator** | Deterministic source verification — checks every finding against the actual checked-out source. Never uses an LLM. |
-| **Review Engine** | Orchestrator — coordinates the full pipeline from changed files to verified findings. |
-| **GitHub Reporter** | Posts the formatted review result as a comment on the CALLER repository's Pull Request. |
-| **GitHub Actions** | Trigger and execution environment — the reusable workflow is called by other repositories. |
+The engine can also run locally against a file or a diff via the CLI (below).
+Full component detail is in [docs/architecture.md](docs/architecture.md).
 
 ---
 
-## Repository structure
+## How to run the project
 
-```
-ai-pr-review/
-│
-├── src/
-│   ├── core/
-│   │   ├── reviewEngine.js       # Orchestrates the full pipeline
-│   │   ├── reviewContext.js      # Input normalisation
-│   │   └── reviewResult.js       # Output shape + factory helpers
-│   │
-│   ├── genesis/
-│   │   └── genesisAdapter.js     # Repository intelligence (optional)
-│   │
-│   ├── agents/
-│   │   └── securityAgent.js      # SQL Injection detection via LLM
-│   │
-│   ├── validation/
-│   │   └── evidenceValidator.js  # Deterministic source verification
-│   │
-│   ├── integrations/
-│   │   ├── groq.js               # Groq API client (TLS-safe)
-│   │   └── github.js             # GitHub REST API (postComment, getFiles)
-│   │
-│   ├── reporting/
-│   │   └── githubReporter.js     # PR comment formatting + posting
-│   │
-│   └── cli/
-│       └── index.js              # CLI + GitHub Actions entry point
-│
-├── fixtures/
-│   ├── vulnerable.js             # SQL injection fixture (for tests + demo)
-│   ├── safe.js                   # Safe parameterised queries (for tests)
-│   └── fake-finding.js           # Innocent file (tests UNVERIFIED path)
-│
-├── tests/
-│   └── review.test.js            # 13 test suites, fully mocked (no LLM)
-│
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                # CI for this repository
-│       └── reusable-review.yml   # Reusable workflow (called by others)
-│
-├── package.json
-├── vitest.config.js
-├── .env.example
-└── README.md
-```
-
----
-
-## Reusable GitHub Actions workflow
-
-`reusable-review.yml` uses `workflow_call` so any other repository can trigger a review without copying the engine.
-
-### How the cross-repository flow works
-
-1. A developer opens a PR in `ai-pr-review-demo`.
-2. `ai-pr-review-demo`'s `ai-security-review.yml` fires.
-3. It calls `YOUR_ORG/ai-pr-review/.github/workflows/reusable-review.yml@main`.
-4. The reusable workflow **checks out `ai-pr-review-demo`** (the caller), not `ai-pr-review`.
-5. Changed JS/TS files are identified via the GitHub API.
-6. The review engine runs against those files.
-7. The GitHub Reporter posts the result on **`ai-pr-review-demo`'s PR** — not on any `ai-pr-review` PR.
-
-The key mechanism: when `workflow_call` fires, `github.repository` and `github.ref` already point to the **caller repository**. The default `actions/checkout` therefore checks out the caller's code. The engine code is checked out separately into `_ai_review_engine/` so it never overwrites the caller's workspace.
-
----
-
-## Setup (caller repository)
-
-### Step 1 — Add GROQ_API_KEY secret
-
-In your repository: **Settings → Secrets and variables → Actions → New repository secret**
-
-- Name: `GROQ_API_KEY`
-- Value: your Groq API key (obtain free at https://console.groq.com)
-
-### Step 2 — Add the caller workflow
-
-Create `.github/workflows/ai-security-review.yml` in your repository:
-
-```yaml
-name: AI Security Review
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  ai-review:
-    uses: YOUR_ORG/ai-pr-review/.github/workflows/reusable-review.yml@main
-    secrets:
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-```
-
-Replace `YOUR_ORG` with the GitHub organisation or user that owns the `ai-pr-review` repository.
-
-That is the complete integration. No engine code lives in your repository.
-
----
-
-## Local usage
+Requires Node.js ≥ 20.
 
 ```bash
 # Install dependencies
 npm install
 
-# Review a specific file
+# Review a single file (local)
 npm run ai-review -- fixtures/vulnerable.js
 
-# Review the vulnerable fixture (built-in shortcut)
+# Review the built-in vulnerable fixture (shortcut)
 npm run ai-review:test
 
-# Run all tests (no GROQ_API_KEY required — tests are fully mocked)
+# Run the full test suite (fully mocked — no GROQ_API_KEY required)
+npm test
+
+# Live smoke test against fixtures (REAL Groq calls; needs GROQ_API_KEY).
+# No-ops safely (exit 0) when the key is absent.
+npm run smoke
+```
+
+CLI entry point: `src/cli/index.js`. Supported inputs:
+
+| Flag | Description |
+|---|---|
+| `<file>` | Review one or more file paths directly. |
+| `--diff-file <path>` | Review a unified diff (preferred for PR review). |
+| `--files-from <path>` | Review a newline-separated list of file paths. |
+| `--report-to-pr` | Post the result as a PR comment (requires PR env vars). |
+
+Local usage does not modify source files and never approves, merges, or blocks
+a Pull Request.
+
+---
+
+## Configuration / environment variables
+
+Copy `.env.example` to `.env.local` for local development. Do **not** commit
+`.env.local` or any real credentials.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `GROQ_API_KEY` | Yes (for LLM analysis) | Groq API key. Read from the environment only — never hardcoded or logged. |
+| `GROQ_SECURITY_MODEL` | No | Override the model for security analysis. Default: `openai/gpt-oss-20b`. |
+| `GROQ_QUALITY_MODEL` | No | Override the model for quality analysis. Falls back to `GROQ_SECURITY_MODEL`. |
+| `REVIEW_REPO_ROOT` | No | Root of the repository being reviewed. Set by the workflow to the checkout path; defaults to the current working directory locally. |
+| `GITHUB_TOKEN` | Only for `--report-to-pr` | Token used to post the PR comment. Provided automatically by GitHub Actions. |
+| `PR_NUMBER`, `PR_REPO_OWNER`, `PR_REPO_NAME` | Only for `--report-to-pr` | Identify which PR to comment on. |
+| `AI_REVIEW_ENABLE_QUALITY` | No | Master switch for the Quality Agent (default on). `false`/`0`/`no`/`off` runs security only. |
+| `AI_REVIEW_QUALITY_CATEGORIES` | No | Comma allow-list — run only these quality categories. |
+| `AI_REVIEW_DISABLE_CATEGORIES` | No | Comma list — remove categories from the default set. |
+| `AI_REVIEW_QUALITY_MIN_SEVERITY` | No | Drop quality findings below this severity (`LOW`\|`MEDIUM`\|`HIGH`\|`CRITICAL`; default `LOW`). |
+| `AI_REVIEW_MAX_DIFF_CHARS` | No | Diff section limit (default 8000). |
+| `AI_REVIEW_MAX_SOURCE_CONTEXT_CHARS` | No | Source-context limit (default 12000). |
+| `AI_REVIEW_MAX_GENESIS_CONTEXT_CHARS` | No | Genesis-context limit (default 4000). |
+| `AI_REVIEW_MAX_PROMPT_CHARS` | No | Total combined prompt limit (default 24000). |
+| `HTTPS_PROXY` / `HTTP_PROXY` | No | Corporate proxy support. TLS verification stays enabled. |
+| `NODE_EXTRA_CA_CERTS` | No | Path to a corporate CA certificate (e.g. Zscaler). |
+
+TLS certificate verification is always enabled. `rejectUnauthorized: false` is
+never set.
+
+---
+
+## Current security checks
+
+The Security Agent detects two vulnerability classes today:
+
+- **SQL Injection (`SQL_INJECTION`)** — user-controlled input concatenated or
+  interpolated directly into a SQL string without parameterisation. Parameterised
+  queries, prepared statements, and static SQL are treated as safe.
+- **Hardcoded Secrets (`HARDCODED_SECRET`)** — real credential literals in source
+  (API keys, tokens, passwords, private keys, connection strings). Environment
+  reads (`process.env.*`) and obvious placeholders (`YOUR_API_KEY`, etc.) are not
+  flagged.
+
+Every finding is passed through the Evidence Validator, which confirms the file
+exists, the line is within range, and the reported evidence appears in the
+source. See [docs/security-agent.md](docs/security-agent.md).
+
+---
+
+## Basic testing instructions
+
+```bash
+# Run all tests (offline, LLM fully mocked)
 npm test
 ```
 
-### Environment variables
+Latest measured result: **150 tests pass** (Vitest). The suite covers SQL
+Injection detection, Hardcoded Secrets detection (positive and negative cases),
+the Evidence Validator (VERIFIED / UNVERIFIED paths), the Context Builder
+bounding, the Quality Agent catalog and configuration, and the GitHub Reporter
+formatting. No `GROQ_API_KEY` is required — all LLM responses are mocked.
 
-Copy `.env.example` to `.env.local` and fill in:
-
-```
-GROQ_API_KEY=your-key-here
-```
-
-For reviewing a repository other than the current directory:
-
-```
-REVIEW_REPO_ROOT=/path/to/the/repository/being/reviewed
-```
-
-For corporate proxy (e.g. Zscaler) — TLS verification stays enabled:
-
-```
-HTTPS_PROXY=http://proxy.example.com:8080
-NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.crt
-```
+For details see [docs/testing.md](docs/testing.md).
 
 ---
 
-## Security
+## Documentation
 
-- `GROQ_API_KEY` comes from environment only — never hardcoded, never logged.
-- `GITHUB_TOKEN` is the caller repository's Actions token — never a PAT, no extra permissions.
-- TLS certificate verification is always **enabled**. `rejectUnauthorized: false` is never set.
-- Corporate proxy support via `HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS` without disabling TLS.
-- The review engine never approves, merges, blocks, or modifies a Pull Request.
-- The review engine never writes to source files.
-
----
-
-## Evidence Validator
-
-The Evidence Validator is deterministic and never uses an LLM.
-
-For every AI finding it checks:
-
-1. The referenced file exists on disk.
-2. The referenced line number is within the file's line count.
-3. The reported evidence appears in the source around the reported line.
-
-A finding is only marked **VERIFIED** when all three checks pass.
-LLM confidence alone is never sufficient — a finding the LLM is "certain" about
-is still **UNVERIFIED** if the source does not confirm it.
+- [docs/architecture.md](docs/architecture.md) — MVP architecture, components, two-repo setup, current vs future.
+- [docs/context-management.md](docs/context-management.md) — the whole-file problem, the request-size issue, and the bounded-context solution.
+- [docs/security-agent.md](docs/security-agent.md) — Security Agent, the two checks, false-positive handling, and the validator.
+- [docs/testing.md](docs/testing.md) — test suite, cases, CI, and latest results.
+- [CHANGELOG.md](CHANGELOG.md) — notable changes during MVP development.
+- [integration.md](integration.md) — how a caller repository connects to the engine.
 
 ---
 
-## Reusability across many repositories
+## Security notes
 
-The same `ai-pr-review` repository can be consumed by any number of repositories:
-
-```
-GitHub Organisation
-        |
- ┌──────┼──────┬──────┐
- │      │      │      │
-Repo A  Repo B Repo C Repo D
- │      │      │      │
- └──────┴──────┴──────┘
-              |
-         workflow_call
-              |
-         ai-pr-review
-              |
-        Review Engine
-```
-
-Each consumer adds one small caller workflow. The engine is maintained in one place.
-
----
-
-## Production direction (future)
-
-For this MVP, the integration uses **GitHub Actions + reusable workflow**.
-
-The long-term organisation-wide architecture could use a GitHub App:
-
-```
-GitHub Organisation
-        |
- Repo A, Repo B, Repo C, Repo D
-        |
-   GitHub App  ←— receives PR webhook events for all repos
-        |
-   ai-pr-review
-        |
-   Review Engine
-```
-
-This is **not implemented in this MVP**. The reusable workflow approach is sufficient for demonstrating and validating the AI review engine before committing to a GitHub App.
-
----
-
-## What is NOT implemented (by design)
-
-- Quality Agent, Correctness Agent, Testing Agent
-- Multiple-agent orchestration
-- Autonomous code fixes or PR modifications
-- Automatic approval, merge, or blocking
-- Production dashboard or review database
-- GitHub App
-- Full 2×2 uncertainty matrix
-
-The architecture is intentionally extensible for all of the above.
+- Credentials are read from the environment only and are never logged.
+- The engine never writes to source files and never approves, merges, blocks, or
+  modifies a Pull Request. Its output is informational.
+- Prompt-size diagnostics logged during a run contain character counts only —
+  no source code and no secrets.

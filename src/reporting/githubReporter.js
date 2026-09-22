@@ -31,6 +31,7 @@
  */
 
 import { postPRComment, isGitHubAvailable } from '../integrations/github.js';
+import { categoryMetaForType }              from '../agents/checkCatalog.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Severity icons — Unicode works in GitHub Markdown
@@ -42,6 +43,28 @@ const SEV_ICON = {
   MEDIUM:   '🟡',
   LOW:      '🔵',
 };
+
+// Security finding types are owned by the Security Agent. Everything else is
+// categorised via the shared check catalog (categoryMetaForType).
+const SECURITY_TYPES = new Set(['SQL_INJECTION', 'HARDCODED_SECRET']);
+
+/**
+ * Display category ("<icon> <label>") for a finding type. Security types map to
+ * a single Security bucket; quality types resolve through the catalog so a new
+ * category shows up here automatically.
+ *
+ * @param {string} type
+ * @returns {string}
+ */
+function categoryOf(type) {
+  if (SECURITY_TYPES.has(type)) return '🔐 Security';
+  const meta = categoryMetaForType(type);
+  return `${meta.icon} ${meta.label}`;
+}
+
+function isSecurityType(type) {
+  return SECURITY_TYPES.has(type);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -112,9 +135,9 @@ export function buildCommentBody(results) {
   const lines = [];
 
   // ── Header ────────────────────────────────────────────────────────────────
-  lines.push('## 🤖 AI Security Review');
+  lines.push('## 🤖 AI Code Review');
   lines.push('');
-  lines.push('> **Powered by:** Genesis · Security Agent · Groq/LLM · Evidence Validator');
+  lines.push('> **Powered by:** Genesis · Security Agent · Quality Agent · Groq/LLM · Evidence Validator');
   lines.push('');
 
   // ── Summary ───────────────────────────────────────────────────────────────
@@ -124,7 +147,7 @@ export function buildCommentBody(results) {
       lines.push('');
       lines.push('Check that `GROQ_API_KEY` is configured as a repository secret.');
     } else {
-      lines.push('✅ **No SQL Injection findings detected** in the changed files.');
+      lines.push('✅ **No security or code-quality findings detected** in the changed files.');
     }
     lines.push('');
     lines.push(buildFooter(batch));
@@ -135,6 +158,8 @@ export function buildCommentBody(results) {
     `**Findings: ${allFindings.length}** ` +
     `(${totalVerified} verified ✅ · ${totalUnverified} unverified ❌)`
   );
+  lines.push('');
+  lines.push(buildCategoryBreakdown(allFindings));
   lines.push('');
   lines.push('---');
   lines.push('');
@@ -148,10 +173,15 @@ export function buildCommentBody(results) {
     lines.push('');
     lines.push(`| Field          | Value |`);
     lines.push(`|----------------|-------|`);
+    const lineLabel = f.endLine && f.endLine > f.line
+      ? `${f.line}–${f.endLine}`
+      : `${f.line}`;
+
+    lines.push(`| **Category**   | ${categoryOf(f.type)} |`);
     lines.push(`| **Severity**   | ${sevIcon} ${f.severity} |`);
     lines.push(`| **Confidence** | ${f.confidence} |`);
     lines.push(`| **File**       | \`${f.file}\` |`);
-    lines.push(`| **Line**       | ${f.line} |`);
+    lines.push(`| **Line${f.endLine && f.endLine > f.line ? 's' : ''}**       | ${lineLabel} |`);
     lines.push(`| **Verification** | ${verIcon} |`);
     lines.push('');
 
@@ -206,6 +236,30 @@ export function buildCommentBody(results) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build the "Security: n · Correctness: n · ..." breakdown line, listing only
+ * the categories that actually have findings so the comment stays compact.
+ *
+ * @param {Array} allFindings
+ * @returns {string}
+ */
+function buildCategoryBreakdown(allFindings) {
+  const counts = new Map();   // display label → count
+
+  for (const f of allFindings) {
+    const label = isSecurityType(f.type)
+      ? '🔐 Security'
+      : (() => { const m = categoryMetaForType(f.type); return `${m.icon} ${m.label}`; })();
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+
+  if (counts.size === 0) return '';
+
+  return [...counts.entries()]
+    .map(([label, n]) => `${label}: ${n}`)
+    .join(' · ');
+}
 
 /**
  * Normalise the results argument into a consistent

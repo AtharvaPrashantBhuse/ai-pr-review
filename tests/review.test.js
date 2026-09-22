@@ -544,9 +544,9 @@ describe('Test 12 — GitHub Reporter: buildCommentBody output', () => {
     durationMs:       1200,
   });
 
-  it('Contains the AI Security Review header', () => {
+  it('Contains the AI Code Review header', () => {
     const body = buildCommentBody(singleResult);
-    expect(body).toContain('AI Security Review');
+    expect(body).toContain('AI Code Review');
   });
 
   it('Includes finding type SQL_INJECTION', () => {
@@ -578,7 +578,7 @@ describe('Test 12 — GitHub Reporter: buildCommentBody output', () => {
       durationMs:       500,
     });
     const body = buildCommentBody(emptyResult);
-    expect(body).toContain('No SQL Injection findings detected');
+    expect(body).toContain('No security or code-quality findings detected');
   });
 
   it('Error result shows warning when LLM unavailable', () => {
@@ -1185,5 +1185,694 @@ describe('Test 26 — Multiple findings: SQL Injection and Hardcoded Secret in o
     expect(body).toContain('SQL_INJECTION');
     expect(body).toContain('HARDCODED_SECRET');
     expect(body).toContain('VERIFIED');
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 27–33 — Code Quality detection (Quality Agent)
+//
+// Like the security tests, these mock the LLM by feeding representative JSON
+// through the same parseFindings + validateFindings path used in production.
+// No real Groq call is made.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { parseFindings as parseQualityFindings }   from '../src/agents/findingParser.js';
+import { QUALITY_TYPES }                            from '../src/agents/qualityAgent.js';
+
+// ─── Test 27 — DEAD_CODE detected and VERIFIED ────────────────────────────────
+
+describe('Test 27 — Quality: dead code detected and VERIFIED', () => {
+  const mockFinding = {
+    type:        'DEAD_CODE',
+    severity:    'MEDIUM',
+    confidence:  'HIGH',
+    file:        'quality-issues.js',
+    line:        23,
+    evidence:    'total = total * 2;',
+    explanation: 'Statement after an unconditional return is unreachable.',
+  };
+
+  it('parseFindings normalises DEAD_CODE type correctly', () => {
+    const parsed = parseQualityFindings(JSON.stringify([mockFinding]));
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].type).toBe('DEAD_CODE');
+    expect(parsed[0].severity).toBe('MEDIUM');
+  });
+
+  it('Evidence Validator returns VERIFIED for the dead-code line', () => {
+    const result = validateFinding(mockFinding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.sourceLine).toContain('total = total * 2');
+  });
+
+  it('Full pipeline: DEAD_CODE finding is VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([mockFinding]);
+    expect(merged[0].type).toBe('DEAD_CODE');
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 28 — LOGIC_ERROR detected and VERIFIED ──────────────────────────────
+
+describe('Test 28 — Quality: logic error detected and VERIFIED', () => {
+  const mockFinding = {
+    type:        'LOGIC_ERROR',
+    severity:    'HIGH',
+    confidence:  'HIGH',
+    file:        'quality-issues.js',
+    line:        28,
+    evidence:    "if (user.role = 'admin') {",
+    explanation: 'Assignment (=) used where comparison (===) was intended.',
+  };
+
+  it('Evidence Validator returns VERIFIED for the logic-error line', () => {
+    const result = validateFinding(mockFinding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.sourceLine).toContain('user.role');
+  });
+
+  it('Full pipeline: LOGIC_ERROR finding is VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([mockFinding]);
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 29 — BUG_RISK detected and VERIFIED ─────────────────────────────────
+
+describe('Test 29 — Quality: bug risk detected and VERIFIED', () => {
+  const mockFinding = {
+    type:        'BUG_RISK',
+    severity:    'MEDIUM',
+    confidence:  'MEDIUM',
+    file:        'quality-issues.js',
+    line:        36,
+    evidence:    'return user.address.city;',
+    explanation: 'Possible null dereference — user.address may be undefined.',
+  };
+
+  it('Evidence Validator returns VERIFIED for the bug-risk line', () => {
+    const result = validateFinding(mockFinding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.sourceLine).toContain('user.address.city');
+  });
+
+  it('Full pipeline: BUG_RISK finding is VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([mockFinding]);
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 30 — DUPLICATE_CODE detected and VERIFIED ───────────────────────────
+
+describe('Test 30 — Quality: duplicate code detected and VERIFIED', () => {
+  const mockFinding = {
+    type:        'DUPLICATE_CODE',
+    severity:    'LOW',
+    confidence:  'MEDIUM',
+    file:        'quality-issues.js',
+    line:        46,
+    evidence:    'const rounded = Math.round(amount * 100) / 100;',
+    explanation: 'Duplicate of the rounding logic in formatUsd; extract a helper.',
+  };
+
+  it('Evidence Validator returns VERIFIED for the duplicate-code line', () => {
+    const result = validateFinding(mockFinding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.sourceLine).toContain('Math.round(amount * 100)');
+  });
+
+  it('Full pipeline: DUPLICATE_CODE finding is VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([mockFinding]);
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 31 — Fabricated quality finding is UNVERIFIED ───────────────────────
+
+describe('Test 31 — Quality: fabricated finding is UNVERIFIED', () => {
+  it('UNVERIFIED when the claimed line does not contain the evidence', () => {
+    const fabricated = {
+      type:        'LOGIC_ERROR',
+      severity:    'HIGH',
+      confidence:  'HIGH',
+      file:        'quality-issues.js',
+      line:        35,   // real line, but evidence is unrelated
+      evidence:    'while (zzz_nonexistent_9999 <= somethingElse) doStuff();',
+      explanation: 'Fabricated — this construct does not exist in the file.',
+    };
+    const result = validateFinding(fabricated, FIXTURES);
+    expect(result.status).toBe('UNVERIFIED');
+  });
+
+  it('UNVERIFIED when line is beyond end of file', () => {
+    const fabricated = {
+      type:        'DEAD_CODE',
+      severity:    'MEDIUM',
+      confidence:  'HIGH',
+      file:        'quality-issues.js',
+      line:        9999,
+      evidence:    'total = total * 2;',
+      explanation: 'Fabricated — line beyond EOF.',
+    };
+    const result = validateFinding(fabricated, FIXTURES);
+    expect(result.status).toBe('UNVERIFIED');
+    expect(result.reason).toMatch(/does not exist|only has/i);
+  });
+});
+
+// ─── Test 32 — Quality Agent restricts to its own finding types ───────────────
+
+describe('Test 32 — Quality Agent type filter', () => {
+  it('QUALITY_TYPES contains the four quality categories', () => {
+    expect(QUALITY_TYPES.has('DEAD_CODE')).toBe(true);
+    expect(QUALITY_TYPES.has('DUPLICATE_CODE')).toBe(true);
+    expect(QUALITY_TYPES.has('LOGIC_ERROR')).toBe(true);
+    expect(QUALITY_TYPES.has('BUG_RISK')).toBe(true);
+  });
+
+  it('QUALITY_TYPES does NOT contain security types', () => {
+    expect(QUALITY_TYPES.has('SQL_INJECTION')).toBe(false);
+    expect(QUALITY_TYPES.has('HARDCODED_SECRET')).toBe(false);
+  });
+
+  it('a mixed LLM response can be split by type via QUALITY_TYPES', () => {
+    const mixed = parseQualityFindings(JSON.stringify([
+      { type: 'DEAD_CODE',     severity: 'LOW',  confidence: 'HIGH', file: 'a.js', line: 1, evidence: 'x', explanation: 'y' },
+      { type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH', file: 'a.js', line: 2, evidence: 'x', explanation: 'y' },
+    ]));
+    const qualityOnly = mixed.filter(f => QUALITY_TYPES.has(f.type));
+    expect(qualityOnly).toHaveLength(1);
+    expect(qualityOnly[0].type).toBe('DEAD_CODE');
+  });
+});
+
+// ─── Test 33 — Reporter renders security + quality findings together ──────────
+
+describe('Test 33 — Reporter: security and quality findings in one comment', () => {
+  const mixedFindings = [
+    {
+      type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+      file: 'vulnerable.js', line: 21,
+      evidence: "'SELECT * FROM users WHERE id = ' + userId",
+      explanation: 'User input concatenated into SQL.',
+      verification: { status: 'VERIFIED', file: 'vulnerable.js', line: 21, sourceLine: 'x' },
+    },
+    {
+      type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+      file: 'quality-issues.js', line: 27,
+      evidence: "if (user.role = 'admin') {",
+      explanation: 'Assignment used where comparison intended.',
+      verification: { status: 'VERIFIED', file: 'quality-issues.js', line: 27, sourceLine: 'x' },
+    },
+  ];
+
+  const result = makeReviewResult({
+    findings:         mixedFindings,
+    genesisAvailable: false,
+    llmUsed:          true,
+    error:            null,
+    durationMs:       800,
+  });
+
+  it('comment header reflects a combined code review', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('AI Code Review');
+  });
+
+  it('comment shows both category counts', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('🔐 Security: 1');
+    expect(body).toContain('🐞 Correctness: 1');
+  });
+
+  it('comment renders both finding types with a Category row', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('SQL_INJECTION');
+    expect(body).toContain('LOGIC_ERROR');
+    expect(body).toContain('Category');
+    expect(body).toContain('🐞 Correctness');
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 34–46 — Production code-quality catalog: config, categories, ranges
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  resolveQualityConfig,
+  filterQualityFindings,
+  categoryMetaForType,
+  isRangeType,
+  meetsSeverityFloor,
+  ALL_QUALITY_TYPES,
+  RANGE_TYPES,
+  CATEGORIES,
+} from '../src/agents/checkCatalog.js';
+
+// ─── Test 34 — Catalog config: high-signal defaults ───────────────────────────
+
+describe('Test 34 — checkCatalog: default configuration', () => {
+  it('enables the high-signal categories by default', () => {
+    const cfg = resolveQualityConfig({});
+    ['correctness', 'dead_code', 'duplication', 'error_handling',
+     'maintainability', 'performance', 'api_contract']
+      .forEach(k => expect(cfg.enabledCategories.has(k)).toBe(true));
+  });
+
+  it('disables subjective categories (style, test_coverage) by default', () => {
+    const cfg = resolveQualityConfig({});
+    expect(cfg.enabledCategories.has('style')).toBe(false);
+    expect(cfg.enabledCategories.has('test_coverage')).toBe(false);
+  });
+
+  it('master switch off disables everything', () => {
+    const cfg = resolveQualityConfig({ AI_REVIEW_ENABLE_QUALITY: 'false' });
+    expect(cfg.enabled).toBe(false);
+  });
+
+  it('explicit allow-list runs ONLY the named categories', () => {
+    const cfg = resolveQualityConfig({ AI_REVIEW_QUALITY_CATEGORIES: 'correctness, performance' });
+    expect([...cfg.enabledCategories].sort()).toEqual(['correctness', 'performance']);
+  });
+
+  it('disable-list removes categories from the default set', () => {
+    const cfg = resolveQualityConfig({ AI_REVIEW_DISABLE_CATEGORIES: 'maintainability,performance' });
+    expect(cfg.enabledCategories.has('maintainability')).toBe(false);
+    expect(cfg.enabledCategories.has('performance')).toBe(false);
+    expect(cfg.enabledCategories.has('correctness')).toBe(true);
+  });
+
+  it('enabling style adds STYLE to the enabled types', () => {
+    const cfg = resolveQualityConfig({ AI_REVIEW_QUALITY_CATEGORIES: 'style' });
+    expect(cfg.enabledTypes.has('STYLE')).toBe(true);
+  });
+});
+
+// ─── Test 35 — Severity floor ─────────────────────────────────────────────────
+
+describe('Test 35 — checkCatalog: severity floor', () => {
+  it('meetsSeverityFloor compares ranks correctly', () => {
+    expect(meetsSeverityFloor('HIGH', 'MEDIUM')).toBe(true);
+    expect(meetsSeverityFloor('LOW', 'MEDIUM')).toBe(false);
+    expect(meetsSeverityFloor('CRITICAL', 'CRITICAL')).toBe(true);
+  });
+
+  it('filterQualityFindings drops findings below the configured floor', () => {
+    const cfg = resolveQualityConfig({ AI_REVIEW_QUALITY_MIN_SEVERITY: 'HIGH' });
+    const findings = [
+      { type: 'LOGIC_ERROR', severity: 'HIGH',   file: 'a.js', line: 1 },
+      { type: 'DEAD_CODE',   severity: 'LOW',    file: 'a.js', line: 2 },
+      { type: 'BUG_RISK',    severity: 'CRITICAL', file: 'a.js', line: 3 },
+    ];
+    const kept = filterQualityFindings(findings, cfg);
+    expect(kept.map(f => f.type).sort()).toEqual(['BUG_RISK', 'LOGIC_ERROR']);
+  });
+
+  it('filterQualityFindings drops findings of disabled categories', () => {
+    const cfg = resolveQualityConfig({ AI_REVIEW_QUALITY_CATEGORIES: 'correctness' });
+    const findings = [
+      { type: 'LOGIC_ERROR', severity: 'HIGH', file: 'a.js', line: 1 },
+      { type: 'PERFORMANCE', severity: 'HIGH', file: 'a.js', line: 2 },
+    ];
+    const kept = filterQualityFindings(findings, cfg);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].type).toBe('LOGIC_ERROR');
+  });
+});
+
+// ─── Test 36 — Category metadata + range types ────────────────────────────────
+
+describe('Test 36 — checkCatalog: type metadata and range types', () => {
+  it('every category type resolves to that category', () => {
+    for (const c of CATEGORIES) {
+      for (const t of c.types) {
+        expect(categoryMetaForType(t).key).toBe(c.key);
+      }
+    }
+  });
+
+  it('unknown type falls back to Other', () => {
+    expect(categoryMetaForType('NONSENSE').key).toBe('other');
+  });
+
+  it('range types are recognised', () => {
+    expect(isRangeType('DUPLICATE_CODE')).toBe(true);
+    expect(isRangeType('PERFORMANCE')).toBe(true);
+    expect(isRangeType('COMPLEXITY')).toBe(true);
+    expect(isRangeType('LOGIC_ERROR')).toBe(false);
+  });
+
+  it('ALL_QUALITY_TYPES and RANGE_TYPES are populated', () => {
+    expect(ALL_QUALITY_TYPES.size).toBeGreaterThanOrEqual(12);
+    expect(RANGE_TYPES.size).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// ─── Test 37 — findingParser carries endLine ──────────────────────────────────
+
+describe('Test 37 — findingParser: endLine handling', () => {
+  it('keeps a valid endLine >= line', () => {
+    const [f] = parseQualityFindings(JSON.stringify([{
+      type: 'DUPLICATE_CODE', severity: 'LOW', confidence: 'MEDIUM',
+      file: 'a.js', line: 10, endLine: 20, evidence: 'x', explanation: 'y',
+    }]));
+    expect(f.endLine).toBe(20);
+  });
+
+  it('nulls an endLine that is less than line', () => {
+    const [f] = parseQualityFindings(JSON.stringify([{
+      type: 'DUPLICATE_CODE', severity: 'LOW', confidence: 'MEDIUM',
+      file: 'a.js', line: 20, endLine: 10, evidence: 'x', explanation: 'y',
+    }]));
+    expect(f.endLine).toBeNull();
+  });
+
+  it('nulls a missing endLine', () => {
+    const [f] = parseQualityFindings(JSON.stringify([{
+      type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+      file: 'a.js', line: 5, evidence: 'x', explanation: 'y',
+    }]));
+    expect(f.endLine).toBeNull();
+  });
+});
+
+// ─── Test 38 — Evidence Validator: range findings ─────────────────────────────
+
+describe('Test 38 — evidenceValidator: range (multi-line) findings', () => {
+  it('VERIFIED when evidence is within the claimed range (PERFORMANCE 67-73)', () => {
+    const finding = {
+      type: 'PERFORMANCE', severity: 'HIGH', confidence: 'HIGH',
+      file: 'quality-issues.js', line: 67, endLine: 73,
+      evidence: "users.push(await db.query('SELECT * FROM users WHERE id = $1', [id]));",
+      explanation: 'N+1 query — DB call inside a loop.',
+    };
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.endLine).toBe(73);
+  });
+
+  it('VERIFIED for a duplicate-code range (formatEur block)', () => {
+    const finding = {
+      type: 'DUPLICATE_CODE', severity: 'LOW', confidence: 'MEDIUM',
+      file: 'quality-issues.js', line: 45, endLine: 48,
+      evidence: 'const rounded = Math.round(amount * 100) / 100;',
+      explanation: 'Duplicate of formatUsd rounding logic.',
+    };
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.endLine).toBe(48);
+  });
+
+  it('UNVERIFIED when the range end runs past end of file', () => {
+    const finding = {
+      type: 'PERFORMANCE', severity: 'HIGH', confidence: 'HIGH',
+      file: 'quality-issues.js', line: 67, endLine: 99999,
+      evidence: 'users.push(await db.query',
+      explanation: 'Range past EOF.',
+    };
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('UNVERIFIED');
+    expect(result.reason).toMatch(/does not exist|only has/i);
+  });
+
+  it('UNVERIFIED when evidence is not in the claimed range', () => {
+    const finding = {
+      type: 'DUPLICATE_CODE', severity: 'LOW', confidence: 'MEDIUM',
+      file: 'quality-issues.js', line: 45, endLine: 48,
+      evidence: 'zzz_nonexistent_code_9999(reallyNotThere);',
+      explanation: 'Fabricated range evidence.',
+    };
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('UNVERIFIED');
+  });
+});
+
+// ─── Test 39 — ERROR_HANDLING detected and VERIFIED ───────────────────────────
+
+describe('Test 39 — Quality: error handling issue detected and VERIFIED', () => {
+  const finding = {
+    type: 'ERROR_HANDLING', severity: 'MEDIUM', confidence: 'HIGH',
+    file: 'quality-issues.js', line: 54, endLine: 59,
+    evidence: 'return JSON.parse(readFileSync(path));',
+    explanation: 'Empty catch block swallows the parse error.',
+  };
+
+  it('VERIFIED against the try/catch block', () => {
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+  });
+
+  it('Full pipeline: ERROR_HANDLING finding is VERIFIED', () => {
+    const merged = runPipelineWithMockFindings([finding]);
+    expect(merged[0].type).toBe('ERROR_HANDLING');
+    expect(merged[0].verification.status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 40 — MAGIC_NUMBER detected and VERIFIED ─────────────────────────────
+
+describe('Test 40 — Quality: magic number detected and VERIFIED', () => {
+  const finding = {
+    type: 'MAGIC_NUMBER', severity: 'LOW', confidence: 'MEDIUM',
+    file: 'quality-issues.js', line: 63,
+    evidence: 'return Date.now() - createdAt > 86400000;',
+    explanation: 'Unexplained literal 86400000 (ms per day) should be a named constant.',
+  };
+
+  it('VERIFIED against the magic-number line', () => {
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.sourceLine).toContain('86400000');
+  });
+});
+
+// ─── Test 41 — COMPLEXITY range detected and VERIFIED ─────────────────────────
+
+describe('Test 41 — Quality: complexity range detected and VERIFIED', () => {
+  const finding = {
+    type: 'COMPLEXITY', severity: 'MEDIUM', confidence: 'MEDIUM',
+    file: 'quality-issues.js', line: 76, endLine: 90,
+    evidence: 'function classify(n) {',
+    explanation: 'Deeply nested function should be decomposed.',
+  };
+
+  it('VERIFIED against the function span', () => {
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.endLine).toBe(90);
+  });
+});
+
+// ─── Test 42 — Reporter: renders range findings and dynamic categories ────────
+
+describe('Test 42 — Reporter: range finding + category breakdown', () => {
+  const result = makeReviewResult({
+    findings: [
+      {
+        type: 'PERFORMANCE', severity: 'HIGH', confidence: 'HIGH',
+        file: 'quality-issues.js', line: 67, endLine: 73,
+        evidence: 'db.query', explanation: 'N+1',
+        verification: { status: 'VERIFIED', file: 'quality-issues.js', line: 67, endLine: 73, sourceLine: 'x' },
+      },
+      {
+        type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+        file: 'vulnerable.js', line: 21,
+        evidence: 'x', explanation: 'y',
+        verification: { status: 'VERIFIED', file: 'vulnerable.js', line: 21, sourceLine: 'x' },
+      },
+    ],
+    genesisAvailable: false, llmUsed: true, error: null, durationMs: 400,
+  });
+
+  it('shows a line range (67–73) for the range finding', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('67–73');
+    expect(body).toContain('**Lines**');
+  });
+
+  it('breakdown lists only categories present', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('🔐 Security: 1');
+    expect(body).toContain('⚡ Performance: 1');
+    // A category with no findings must not appear
+    expect(body).not.toContain('Dead Code: ');
+  });
+
+  it('renders the Performance category label on the finding', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('⚡ Performance');
+  });
+});
+
+// ─── Test 43 — Quality Agent honours a pre-resolved config (no LLM) ───────────
+
+describe('Test 43 — qualityAgent: skips when all categories disabled', () => {
+  it('returns skipped=true and no error when enabledTypes is empty', async () => {
+    const { analyseForQuality } = await import('../src/agents/qualityAgent.js');
+    const cfg = resolveQualityConfig({ AI_REVIEW_ENABLE_QUALITY: 'true', AI_REVIEW_DISABLE_CATEGORIES:
+      'correctness,dead_code,duplication,error_handling,maintainability,performance,api_contract' });
+    const result = await analyseForQuality('const x = 1;', '', { config: cfg });
+    expect(result.skipped).toBe(true);
+    expect(result.llmUsed).toBe(false);
+    expect(result.findings).toHaveLength(0);
+  });
+});
+
+// ─── Test 44 — Missing GROQ key: quality agent degrades gracefully ────────────
+
+describe('Test 44 — qualityAgent: graceful without GROQ_API_KEY', () => {
+  let savedKey;
+  beforeEach(() => { savedKey = process.env.GROQ_API_KEY; delete process.env.GROQ_API_KEY; });
+  afterEach(() => { if (savedKey !== undefined) process.env.GROQ_API_KEY = savedKey; else delete process.env.GROQ_API_KEY; });
+
+  it('returns a graceful error result (no crash)', async () => {
+    const { analyseForQuality } = await import('../src/agents/qualityAgent.js');
+    const result = await analyseForQuality('const x = 1;', '');
+    expect(result.llmUsed).toBe(false);
+    expect(result.findings).toHaveLength(0);
+    expect(result.error).toMatch(/GROQ_API_KEY/i);
+  });
+});
+
+// ─── Test 45 — Backward compatibility: existing single-line quality types ─────
+
+describe('Test 45 — Regression: single-line quality types still VERIFY', () => {
+  it('DEAD_CODE single-line still VERIFIED', () => {
+    const finding = {
+      type: 'DEAD_CODE', severity: 'MEDIUM', confidence: 'HIGH',
+      file: 'quality-issues.js', line: 23, evidence: 'total = total * 2;',
+      explanation: 'unreachable',
+    };
+    expect(validateFinding(finding, FIXTURES).status).toBe('VERIFIED');
+  });
+
+  it('LOGIC_ERROR single-line still VERIFIED', () => {
+    const finding = {
+      type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+      file: 'quality-issues.js', line: 28, evidence: "if (user.role = 'admin') {",
+      explanation: 'assignment in condition',
+    };
+    expect(validateFinding(finding, FIXTURES).status).toBe('VERIFIED');
+  });
+});
+
+// ─── Test 46 — Mixed multi-category batch through the full pipeline ───────────
+
+describe('Test 46 — Full pipeline: mixed multi-category findings', () => {
+  const findings = [
+    { type: 'LOGIC_ERROR',    severity: 'HIGH',   confidence: 'HIGH', file: 'quality-issues.js', line: 28, evidence: "if (user.role = 'admin') {", explanation: 'a' },
+    { type: 'ERROR_HANDLING', severity: 'MEDIUM', confidence: 'HIGH', file: 'quality-issues.js', line: 54, endLine: 59, evidence: 'return JSON.parse(readFileSync(path));', explanation: 'b' },
+    { type: 'PERFORMANCE',    severity: 'HIGH',   confidence: 'HIGH', file: 'quality-issues.js', line: 67, endLine: 73, evidence: "users.push(await db.query('SELECT * FROM users WHERE id = $1', [id]));", explanation: 'c' },
+    { type: 'MAGIC_NUMBER',   severity: 'LOW',    confidence: 'MEDIUM', file: 'quality-issues.js', line: 63, evidence: 'return Date.now() - createdAt > 86400000;', explanation: 'd' },
+  ];
+
+  it('all four are VERIFIED', () => {
+    const merged = runPipelineWithMockFindings(findings, FIXTURES);
+    expect(merged).toHaveLength(4);
+    merged.forEach(f => expect(f.verification.status).toBe('VERIFIED'));
+  });
+
+  it('reporter renders all four categories in the breakdown', () => {
+    const result = makeReviewResult({
+      findings: findings.map(f => ({ ...f, verification: { status: 'VERIFIED', file: f.file, line: f.line, endLine: f.endLine, sourceLine: 'x' } })),
+      genesisAvailable: false, llmUsed: true, error: null, durationMs: 600,
+    });
+    const body = buildCommentBody(result);
+    expect(body).toContain('🐞 Correctness');
+    expect(body).toContain('🛟 Error Handling');
+    expect(body).toContain('⚡ Performance');
+    expect(body).toContain('🔧 Maintainability');
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 47–49 — Genesis-assisted checks (API_CONTRACT / TEST_COVERAGE wiring)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Test 47 — Genesis context reaches the agents via combined context ────────
+
+describe('Test 47 — buildContext embeds Genesis repository context for the agents', () => {
+  const DIFF = [
+    '--- a/vulnerable.js',
+    '+++ b/vulnerable.js',
+    '@@ -20,3 +20,4 @@',
+    ' async function getUserById(req, res) {',
+    "+  const sql = 'SELECT * FROM users WHERE id = ' + userId;",
+    ' }',
+  ].join('\n');
+
+  // Simulate the summary genesisAdapter.buildContextSummary() would produce.
+  const GENESIS_SUMMARY = [
+    '## File: vulnerable.js',
+    '  Symbols defined: function getUserById (line 20), function getUserByName (line 28)',
+    '  Imported by (blast radius): src/routes/users.js, src/api/index.js',
+  ].join('\n');
+
+  it('combined context contains the Genesis section when a summary is provided', () => {
+    const { combined } = buildContext(DIFF, FIXTURES, GENESIS_SUMMARY);
+    expect(combined).toContain('=== REPOSITORY CONTEXT (Genesis) ===');
+    expect(combined).toContain('Imported by (blast radius)');
+    expect(combined).toContain('getUserById');
+  });
+
+  it('the agents receive blast-radius info the API_CONTRACT check relies on', () => {
+    const { combined } = buildContext(DIFF, FIXTURES, GENESIS_SUMMARY);
+    // The quality prompt instructs the model to use these lines; here we assert
+    // they are present in what the agent is actually handed.
+    expect(combined).toContain('src/routes/users.js');
+  });
+});
+
+// ─── Test 48 — API_CONTRACT finding verifies + reports under its category ─────
+
+describe('Test 48 — API_CONTRACT finding flows through pipeline and reporter', () => {
+  // vulnerable.js line 20: "async function getUserById(req, res) {"
+  const finding = {
+    type: 'API_CONTRACT', severity: 'HIGH', confidence: 'MEDIUM',
+    file: 'vulnerable.js', line: 20,
+    evidence: 'async function getUserById(req, res) {',
+    explanation: 'Exported handler signature changed; dependents in blast radius may break.',
+  };
+
+  it('is VERIFIED against the exported function line', () => {
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+  });
+
+  it('reporter renders it under the API / Contract category', () => {
+    const result = makeReviewResult({
+      findings: [{ ...finding, verification: { status: 'VERIFIED', file: finding.file, line: finding.line, sourceLine: 'x' } }],
+      genesisAvailable: true, llmUsed: true, error: null, durationMs: 300,
+    });
+    const body = buildCommentBody(result);
+    expect(body).toContain('🔌 API / Contract');
+  });
+});
+
+// ─── Test 49 — TEST_COVERAGE is opt-in and categorised correctly ──────────────
+
+describe('Test 49 — TEST_COVERAGE category behaviour', () => {
+  it('is disabled by default', () => {
+    const cfg = resolveQualityConfig({});
+    expect(cfg.enabledTypes.has('TEST_COVERAGE')).toBe(false);
+  });
+
+  it('is enabled via the allow-list and maps to the Test Coverage category', () => {
+    const cfg = resolveQualityConfig({ AI_REVIEW_QUALITY_CATEGORIES: 'test_coverage' });
+    expect(cfg.enabledTypes.has('TEST_COVERAGE')).toBe(true);
+    expect(categoryMetaForType('TEST_COVERAGE').label).toBe('Test Coverage');
+  });
+
+  it('a TEST_COVERAGE finding is kept only when the category is enabled', () => {
+    const finding = { type: 'TEST_COVERAGE', severity: 'MEDIUM', file: 'a.js', line: 1 };
+
+    const offCfg = resolveQualityConfig({});
+    expect(filterQualityFindings([finding], offCfg)).toHaveLength(0);
+
+    const onCfg = resolveQualityConfig({ AI_REVIEW_QUALITY_CATEGORIES: 'test_coverage' });
+    expect(filterQualityFindings([finding], onCfg)).toHaveLength(1);
   });
 });
