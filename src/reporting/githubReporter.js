@@ -36,6 +36,10 @@ import {
   ALL_SECURITY_TYPES,
   securityCategoryMetaForType,
 } from '../agents/securityCatalog.js';
+import {
+  ALL_TESTING_TYPES,
+  testingCategoryMetaForType,
+} from '../agents/testingCatalog.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Severity icons — Unicode works in GitHub Markdown
@@ -63,6 +67,10 @@ function categoryOf(type) {
   if (ALL_SECURITY_TYPES.has(type)) {
     const meta = securityCategoryMetaForType(type);
     return `${meta.icon} Security: ${meta.label}`;
+  }
+  if (ALL_TESTING_TYPES.has(type)) {
+    const meta = testingCategoryMetaForType(type);
+    return `${meta.icon} Testing: ${meta.label}`;
   }
   const meta = categoryMetaForType(type);
   return `${meta.icon} ${meta.label}`;
@@ -139,7 +147,7 @@ export function buildCommentBody(results) {
   // ── Header ────────────────────────────────────────────────────────────────
   lines.push('## 🤖 AI Code Review');
   lines.push('');
-  lines.push('> **Powered by:** Genesis · Security Agent · Quality Agent · Groq/LLM · Evidence Validator');
+  lines.push('> **Powered by:** Genesis · Security Agent · Quality Agent · Testing Agent · Groq/LLM · Evidence Validator');
   lines.push('');
 
   // ── Summary ───────────────────────────────────────────────────────────────

@@ -2239,3 +2239,216 @@ describe('Test 62 — Reporter groups security findings by category', () => {
     expect(body).toContain('Security: Cryptography: 1');
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 63–69 — Testing catalog (test-quality checks, config, verification)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  resolveTestingConfig,
+  filterTestingFindings,
+  testingCategoryMetaForType,
+  isTestingRangeType,
+  ALL_TESTING_TYPES,
+  TESTING_RANGE_TYPES,
+  TESTING_CATEGORIES,
+} from '../src/agents/testingCatalog.js';
+
+// ─── Test 63 — Testing catalog default configuration ──────────────────────────
+
+describe('Test 63 — testingCatalog: default configuration', () => {
+  it('enables the on-by-default categories', () => {
+    const cfg = resolveTestingConfig({});
+    ['coverage', 'assertions', 'flakiness', 'hygiene', 'mocking', 'async']
+      .forEach(k => expect(cfg.enabledCategories.has(k)).toBe(true));
+  });
+
+  it('disables the noisier categories (isolation, smells) by default', () => {
+    const cfg = resolveTestingConfig({});
+    expect(cfg.enabledCategories.has('isolation')).toBe(false);
+    expect(cfg.enabledCategories.has('smells')).toBe(false);
+  });
+
+  it('allow-list runs ONLY the named categories', () => {
+    const cfg = resolveTestingConfig({ AI_REVIEW_TESTING_CATEGORIES: 'assertions,async' });
+    expect([...cfg.enabledCategories].sort()).toEqual(['assertions', 'async']);
+  });
+
+  it('disable-list removes categories from defaults', () => {
+    const cfg = resolveTestingConfig({ AI_REVIEW_DISABLE_TESTING_CATEGORIES: 'coverage,flakiness' });
+    expect(cfg.enabledCategories.has('coverage')).toBe(false);
+    expect(cfg.enabledCategories.has('flakiness')).toBe(false);
+    expect(cfg.enabledCategories.has('assertions')).toBe(true);
+  });
+
+  it('enabling smells adds its types', () => {
+    const cfg = resolveTestingConfig({ AI_REVIEW_TESTING_CATEGORIES: 'smells' });
+    expect(cfg.enabledTypes.has('TEST_LOGIC')).toBe(true);
+    expect(cfg.enabledTypes.has('MULTIPLE_CONCERNS')).toBe(true);
+  });
+
+  it('master switch off is reflected in config.enabled', () => {
+    expect(resolveTestingConfig({ AI_REVIEW_ENABLE_TESTING: 'false' }).enabled).toBe(false);
+  });
+});
+
+// ─── Test 64 — Testing catalog metadata + range types ─────────────────────────
+
+describe('Test 64 — testingCatalog: metadata and range types', () => {
+  it('every catalog type resolves to its category', () => {
+    for (const c of TESTING_CATEGORIES) {
+      for (const t of c.types) {
+        expect(testingCategoryMetaForType(t).key).toBe(c.key);
+      }
+    }
+  });
+
+  it('unknown type falls back to a generic Testing bucket', () => {
+    expect(testingCategoryMetaForType('NONSENSE').label).toBe('Testing');
+  });
+
+  it('range types are recognised', () => {
+    expect(isTestingRangeType('NO_ASSERTION')).toBe(true);
+    expect(isTestingRangeType('EMPTY_TEST')).toBe(true);
+    expect(isTestingRangeType('SKIPPED_TEST')).toBe(false);
+  });
+
+  it('catalog covers a broad set of types', () => {
+    expect(ALL_TESTING_TYPES.size).toBeGreaterThanOrEqual(25);
+    expect(TESTING_RANGE_TYPES.size).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── Test 65 — severity floor + type filtering ────────────────────────────────
+
+describe('Test 65 — filterTestingFindings: floor + enabled types', () => {
+  it('drops findings below the configured floor', () => {
+    const cfg = resolveTestingConfig({ AI_REVIEW_TESTING_MIN_SEVERITY: 'HIGH' });
+    const findings = [
+      { type: 'SKIPPED_TEST',            severity: 'HIGH', file: 'a.js', line: 1 },
+      { type: 'POOR_TEST_NAME',          severity: 'LOW',  file: 'a.js', line: 2 },
+      { type: 'MISSING_AWAIT_ASSERTION', severity: 'CRITICAL', file: 'a.js', line: 3 },
+    ];
+    const kept = filterTestingFindings(findings, cfg).map(f => f.type).sort();
+    expect(kept).toEqual(['MISSING_AWAIT_ASSERTION', 'SKIPPED_TEST']);
+  });
+
+  it('drops findings whose category is disabled', () => {
+    const cfg = resolveTestingConfig({ AI_REVIEW_TESTING_CATEGORIES: 'assertions' });
+    const findings = [
+      { type: 'NO_ASSERTION',       severity: 'HIGH', file: 'a.js', line: 1 },
+      { type: 'TIME_DEPENDENT_TEST', severity: 'HIGH', file: 'a.js', line: 2 },  // flakiness — disabled
+    ];
+    const kept = filterTestingFindings(findings, cfg);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].type).toBe('NO_ASSERTION');
+  });
+});
+
+// ─── Test 66 — unknown category keys warn ─────────────────────────────────────
+
+describe('Test 66 — resolveTestingConfig warns on unknown keys', () => {
+  let warnSpy;
+  beforeEach(() => { warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(() => { warnSpy.mockRestore(); });
+
+  it('warns and ignores a typo in the allow-list', () => {
+    const cfg = resolveTestingConfig({ AI_REVIEW_TESTING_CATEGORIES: 'assertons,async' });
+    expect([...cfg.enabledCategories]).toEqual(['async']);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0][0]).toMatch(/assertons/);
+  });
+});
+
+// ─── Test 67 — representative testing findings VERIFY against source ───────────
+
+describe('Test 67 — Testing findings verify against the fixture source', () => {
+  const cases = [
+    { type: 'SKIPPED_TEST',            line: 22, evidence: "it.only('computes total', () => {" },
+    { type: 'WEAK_ASSERTION',          line: 29, evidence: 'expect(u).toBeTruthy();' },
+    { type: 'TIME_DEPENDENT_TEST',     line: 35, evidence: 'expect(exp).toBe(Date.now() + 86400000);' },
+    { type: 'MISSING_AWAIT_ASSERTION', line: 40, evidence: "expect(loadConfig('bad')).rejects.toThrow();" },
+    { type: 'UNRESTORED_MOCK',         line: 45, evidence: "const spy = vi.spyOn(console, 'log');" },
+  ];
+
+  for (const c of cases) {
+    it(`${c.type} is VERIFIED at line ${c.line}`, () => {
+      const finding = {
+        type: c.type, severity: 'MEDIUM', confidence: 'HIGH',
+        file: 'testing-issues.js', line: c.line, evidence: c.evidence,
+        explanation: 'test',
+      };
+      const result = validateFinding(finding, FIXTURES);
+      expect(result.status).toBe('VERIFIED');
+    });
+  }
+
+  it('NO_ASSERTION range finding is VERIFIED across its span', () => {
+    const finding = {
+      type: 'NO_ASSERTION', severity: 'MEDIUM', confidence: 'HIGH',
+      file: 'testing-issues.js', line: 17, endLine: 19,
+      evidence: "createUser({ name: 'Ada' });",
+      explanation: 'test body has no assertion',
+    };
+    const result = validateFinding(finding, FIXTURES);
+    expect(result.status).toBe('VERIFIED');
+    expect(result.endLine).toBe(19);
+  });
+
+  it('a fabricated testing finding is UNVERIFIED', () => {
+    const finding = {
+      type: 'SKIPPED_TEST', severity: 'HIGH', confidence: 'HIGH',
+      file: 'testing-issues.js', line: 22,
+      evidence: 'databaseConnectionPool.drainAndClose(zzzUnrelatedHandle);',
+      explanation: 'fabricated — unrelated to any line in the file',
+    };
+    expect(validateFinding(finding, FIXTURES).status).toBe('UNVERIFIED');
+  });
+});
+
+// ─── Test 68 — testing findings through dedup (security still wins) ────────────
+
+describe('Test 68 — Testing findings and dedup interaction', () => {
+  it('a security finding stays primary over an overlapping testing finding', () => {
+    const out = dedupeFindings([
+      { type: 'WEAK_ASSERTION', severity: 'HIGH', confidence: 'HIGH', file: 'a.js', line: 10 },
+      { type: 'SQL_INJECTION',  severity: 'LOW',  confidence: 'LOW',  file: 'a.js', line: 10 },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe('SQL_INJECTION');
+    expect(out[0].alsoFlaggedAs).toEqual(['WEAK_ASSERTION']);
+  });
+
+  it('two testing findings on different lines stay separate', () => {
+    const out = dedupeFindings([
+      { type: 'SKIPPED_TEST',   severity: 'HIGH',   confidence: 'HIGH', file: 'a.js', line: 22 },
+      { type: 'WEAK_ASSERTION', severity: 'MEDIUM', confidence: 'HIGH', file: 'a.js', line: 29 },
+    ]);
+    expect(out).toHaveLength(2);
+  });
+});
+
+// ─── Test 69 — reporter groups testing findings by category ───────────────────
+
+describe('Test 69 — Reporter groups testing findings by category', () => {
+  const result = makeReviewResult({
+    findings: [
+      { type: 'SKIPPED_TEST',            severity: 'HIGH',   confidence: 'HIGH', file: 'testing-issues.js', line: 22, evidence: 'x', explanation: 'y', verification: { status: 'VERIFIED', file: 'testing-issues.js', line: 22, sourceLine: 'x' } },
+      { type: 'MISSING_AWAIT_ASSERTION', severity: 'HIGH',   confidence: 'HIGH', file: 'testing-issues.js', line: 40, evidence: 'x', explanation: 'y', verification: { status: 'VERIFIED', file: 'testing-issues.js', line: 40, sourceLine: 'x' } },
+    ],
+    genesisAvailable: false, llmUsed: true, error: null, durationMs: 300,
+  });
+
+  it('renders distinct testing categories (Hygiene, Async)', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('Testing: Test Hygiene');
+    expect(body).toContain('Testing: Async Correctness');
+  });
+
+  it('breakdown counts each testing category separately', () => {
+    const body = buildCommentBody(result);
+    expect(body).toContain('Testing: Test Hygiene: 1');
+    expect(body).toContain('Testing: Async Correctness: 1');
+  });
+});

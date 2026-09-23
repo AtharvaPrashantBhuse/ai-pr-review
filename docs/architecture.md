@@ -24,7 +24,7 @@ Review Engine  (src/core/reviewEngine.js)
 Context Builder  (src/core/contextBuilder.js)
       │  PR diff + targeted source context (+ Genesis context if present)
       ▼
-Security Agent + Quality Agent  (src/agents/*)
+Security + Quality + Testing Agents  (src/agents/*)
       │  bounded prompt → Groq → LLM → structured JSON findings
       ▼
 Finding Dedup  (src/core/findingDedup.js)
@@ -50,6 +50,8 @@ PR comment on the caller repository
 | **Security Catalog** | `src/agents/securityCatalog.js` | Single source of truth for security categories/types and their environment-driven configuration (toggles, severity floor). |
 | **Quality Agent** | `src/agents/qualityAgent.js` | Runs the code-quality catalog over the same context. Category-scoped prompt, config-driven. See [quality-agent.md](quality-agent.md). |
 | **Check Catalog** | `src/agents/checkCatalog.js` | Single source of truth for quality categories/types and their environment-driven configuration (toggles, severity floor). |
+| **Testing Agent** | `src/agents/testingAgent.js` | Runs the test-quality catalog (coverage, assertions, flakiness, hygiene, mocking, async; isolation and smells opt-in) over the same context. See [testing-agent.md](testing-agent.md). |
+| **Testing Catalog** | `src/agents/testingCatalog.js` | Single source of truth for testing categories/types and their environment-driven configuration (toggles, severity floor). |
 | **Finding Parser** | `src/agents/findingParser.js` | Shared, type-agnostic parser that turns raw LLM text into normalised findings (strips code fences, coerces fields, carries an optional multi-line `endLine`). |
 | **Groq integration** | `src/integrations/groq.js` | Builds the OpenAI-SDK client pointed at the Groq endpoint. Reads `GROQ_API_KEY` from the environment; keeps TLS verification enabled; supports a corporate proxy. |
 | **Finding Dedup** | `src/core/findingDedup.js` | Deterministically merges overlapping findings on the same file+line span into one primary (security always wins), recording the other types as `alsoFlaggedAs`. Reduces reviewer noise. Never uses an LLM. |

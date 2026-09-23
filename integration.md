@@ -7,6 +7,8 @@ The engine runs two analysis agents over the changed code:
 - **Security Agent** — a full security catalog: injection (SQL, NoSQL, command, code, LDAP, XPath, template, header, log), web (XSS, open redirect, CSRF, clickjacking, insecure CORS, postMessage), secrets, cryptography (weak hash/cipher, insecure random, disabled TLS validation…), files/resources (path traversal, SSRF, deserialization…), data exposure, and configuration. Auth and API checks are available but off by default. Category-toggleable; disable entirely with `AI_REVIEW_ENABLE_SECURITY=false`. See [docs/checks.md](docs/checks.md).
 - **Quality Agent** — a full code-quality catalog: correctness (logic errors, bug risks), dead code, duplication, error handling, maintainability (complexity, naming, magic numbers, docs), performance, and API/contract. Style and test-coverage checks are available but off by default. Category-toggleable; disable entirely with `AI_REVIEW_ENABLE_QUALITY=false`. See [docs/checks.md](docs/checks.md).
 
+- **Testing Agent** — a test-quality catalog: coverage gaps, assertions (missing/weak), flakiness, test hygiene (stray `.only`, empty/commented-out/duplicate tests), mocking issues, and async-assertion correctness. Isolation and test-smell checks are available but off by default. Category-toggleable; disable entirely with `AI_REVIEW_ENABLE_TESTING=false`. See [docs/checks.md](docs/checks.md).
+
 ---
 
 ## How it works

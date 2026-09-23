@@ -98,6 +98,33 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   path traversal, weak hash, insecure random, disabled cert validation) with
   fake, test-only payloads.
 
+### Testing Agent — test-quality catalog
+
+- Added a third agent, the **Testing Agent** (`src/agents/testingAgent.js` +
+  `src/agents/testingCatalog.js`), reviewing test code and the test-related
+  aspects of a change. 30 finding types across 8 categories: coverage
+  (missing/untested edge & error paths), assertions (no/weak assertion,
+  assertion-on-mock, snapshot overuse), flakiness (time/randomness/order/network
+  dependence, races), hygiene (stray `.only`/`.skip`, empty/commented-out/
+  duplicate tests, poor names), mocking (unrestored mocks, over-mocking, missing
+  cleanup), and async correctness (un-awaited assertions, unreturned promises,
+  missing `done()`).
+- `isolation` (shared mutable fixtures, hardcoded data, missing cleanup) and
+  `smells` (test logic, multiple concerns, testing internals, trivial tests) are
+  available but **off by default** — noisier / subjective.
+- Per-category configuration: `AI_REVIEW_ENABLE_TESTING`,
+  `AI_REVIEW_TESTING_CATEGORIES`, `AI_REVIEW_DISABLE_TESTING_CATEGORIES`,
+  `AI_REVIEW_TESTING_MIN_SEVERITY`, `GROQ_TESTING_MODEL`. Unknown keys warn; the
+  master switch is honoured defensively; range (`endLine`) findings supported.
+- Wired into the Review Engine (all three agents run in parallel; null-safe when
+  disabled), the reporter (findings grouped as "Testing: <category>"), and dedup
+  (security still always wins over an overlapping testing finding).
+- Honest limitation: the engine does not run the test suite or read coverage —
+  coverage findings are inferences from the diff, not a measured delta. This
+  overlaps with the Quality Agent's `TEST_COVERAGE`; both are best-effort.
+- Added `fixtures/testing-issues.js` (no-assertion test, focused `.only`, weak
+  assertion, time-dependent test, un-awaited async assertion, unrestored mock).
+
 ### Genesis activation in CI
 
 - The reusable workflow now checks out the Genesis toolkit and runs
@@ -129,8 +156,8 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   (positive/negative/normalisation/regression/mixed), the Evidence Validator
   (VERIFIED and UNVERIFIED paths), the Context Builder bounding, the Quality
   Agent catalog/config and range validation, the Security Agent catalog/config,
-  finding de-duplication, and the GitHub Reporter.
-- Latest measured result: **188 tests passing**.
+  the Testing Agent catalog/config, finding de-duplication, and the GitHub Reporter.
+- Latest measured result: **212 tests passing**.
 - CI (`.github/workflows/ci.yml`) runs the suite on push and pull_request.
 
 ### Documentation

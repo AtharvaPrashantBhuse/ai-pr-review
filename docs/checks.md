@@ -1,10 +1,11 @@
 # Check Reference
 
-The complete list of checks performed by the two agents. This is generated from
+The complete list of checks performed by the three agents. This is generated from
 the catalogs, which are the single source of truth:
 
 - Security: `src/agents/securityCatalog.js`
 - Quality:  `src/agents/checkCatalog.js`
+- Testing:  `src/agents/testingCatalog.js`
 
 Legend: **Default** = whether the category runs out of the box. *(range)* marks
 finding types that can span multiple lines (they carry an `endLine` and are
@@ -100,15 +101,61 @@ whole-PR context; both are opt-in via `AI_REVIEW_QUALITY_CATEGORIES`.
 
 ---
 
+## Testing Agent — 30 checks across 8 categories
+
+Reviews test code and the test-related aspects of a change.
+
+| Category | Default | Type | What it flags |
+|---|---|---|---|
+| **Test Coverage** | on | `MISSING_TEST` | New/changed non-trivial function or branch with no accompanying test. |
+| | | `UNTESTED_EDGE_CASE` | Happy path tested but empty/boundary/invalid inputs are not. |
+| | | `UNTESTED_ERROR_PATH` | A throw/catch/rejection path with no test exercising it. |
+| **Assertions** | on | `NO_ASSERTION` *(range)* | A test that runs code but asserts nothing. |
+| | | `WEAK_ASSERTION` | Asserts only truthiness/not-null where a specific value is checkable. |
+| | | `ASSERTION_ON_MOCK` | Assertion effectively checks the mock, not real behaviour. |
+| | | `SNAPSHOT_OVERUSE` | Large/opaque snapshot standing in for real assertions. |
+| **Flakiness** | on | `TIME_DEPENDENT_TEST` | Relies on real `Date.now()`/timers/sleep without faking. |
+| | | `RANDOMNESS_IN_TEST` | Depends on `Math.random`/unseeded randomness in assertions. |
+| | | `ORDER_DEPENDENT_TEST` | Depends on execution order or leaks state between tests. |
+| | | `NETWORK_IN_UNIT_TEST` | Real network/DB/filesystem call in a unit test. |
+| | | `RACE_IN_TEST` | Unawaited async work whose result an assertion reads. |
+| **Test Hygiene** | on | `SKIPPED_TEST` | `.skip`/`xit`, or a focused `.only`/`fit` (silently drops other tests). |
+| | | `EMPTY_TEST` *(range)* | Declared test with an empty or TODO-only body. |
+| | | `COMMENTED_OUT_TEST` *(range)* | Test code commented out instead of removed/fixed. |
+| | | `DUPLICATE_TEST` | Near-identical test cases that should be parameterised. |
+| | | `POOR_TEST_NAME` | Non-descriptive names (`test1`, "works"). |
+| **Mocking** | on | `UNRESTORED_MOCK` | Mock/spy/stub not reset or restored (leaks across tests). |
+| | | `OVER_MOCKING` *(range)* | So much mocked the test no longer exercises real logic. |
+| | | `MISSING_MOCK_CLEANUP` | Missing `afterEach`/`restoreAllMocks`. |
+| **Async Correctness** | on | `MISSING_AWAIT_ASSERTION` | An async assertion (`.rejects`/`.resolves`) not awaited. |
+| | | `PROMISE_NOT_RETURNED` | A promise in a test not returned/awaited, so a rejection is swallowed. |
+| | | `MISSING_DONE_CALLBACK` | Callback-style async test that never calls `done()`. |
+| **Test Data & Isolation** | **off** | `SHARED_MUTABLE_FIXTURE` | A shared fixture mutated by tests, coupling them. |
+| | | `HARDCODED_TEST_DATA` | Brittle magic values that should be constants/builders. |
+| | | `MISSING_CLEANUP` | Created files/records/connections not torn down. |
+| **Test Smells** | **off** | `TEST_LOGIC` *(range)* | Conditionals/loops in tests that hide what is asserted. |
+| | | `MULTIPLE_CONCERNS` *(range)* | One test asserting many unrelated behaviours. |
+| | | `TESTING_IMPLEMENTATION` | Asserting private internals instead of behaviour. |
+| | | `TRIVIAL_TEST` | Testing the language/framework, not your code. |
+
+**Off-by-default rationale:** `isolation` is noisier and `smells` is subjective;
+both are opt-in via `AI_REVIEW_TESTING_CATEGORIES`.
+
+**Important limitation:** the engine does **not** run the test suite or read a
+coverage report. `MISSING_TEST` and the other coverage checks are LLM inferences
+from the diff and repository context — clear gaps, not a measured coverage delta.
+
+---
+
 ## Configuration summary
 
-| Concern | Security env var | Quality env var |
-|---|---|---|
-| Master switch | `AI_REVIEW_ENABLE_SECURITY` | `AI_REVIEW_ENABLE_QUALITY` |
-| Allow-list (only these) | `AI_REVIEW_SECURITY_CATEGORIES` | `AI_REVIEW_QUALITY_CATEGORIES` |
-| Disable specific | `AI_REVIEW_DISABLE_SECURITY_CATEGORIES` | `AI_REVIEW_DISABLE_CATEGORIES` |
-| Severity floor | `AI_REVIEW_SECURITY_MIN_SEVERITY` | `AI_REVIEW_QUALITY_MIN_SEVERITY` |
-| Model override | `GROQ_SECURITY_MODEL` | `GROQ_QUALITY_MODEL` |
+| Concern | Security env var | Quality env var | Testing env var |
+|---|---|---|---|
+| Master switch | `AI_REVIEW_ENABLE_SECURITY` | `AI_REVIEW_ENABLE_QUALITY` | `AI_REVIEW_ENABLE_TESTING` |
+| Allow-list (only these) | `AI_REVIEW_SECURITY_CATEGORIES` | `AI_REVIEW_QUALITY_CATEGORIES` | `AI_REVIEW_TESTING_CATEGORIES` |
+| Disable specific | `AI_REVIEW_DISABLE_SECURITY_CATEGORIES` | `AI_REVIEW_DISABLE_CATEGORIES` | `AI_REVIEW_DISABLE_TESTING_CATEGORIES` |
+| Severity floor | `AI_REVIEW_SECURITY_MIN_SEVERITY` | `AI_REVIEW_QUALITY_MIN_SEVERITY` | `AI_REVIEW_TESTING_MIN_SEVERITY` |
+| Model override | `GROQ_SECURITY_MODEL` | `GROQ_QUALITY_MODEL` | `GROQ_TESTING_MODEL` |
 
 All category values are lowercase (e.g. `injection`, `correctness`). Unknown
 keys are ignored with a logged warning. Severity is one of

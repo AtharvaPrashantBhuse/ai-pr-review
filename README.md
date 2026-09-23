@@ -11,6 +11,10 @@ reporting it:
 - **Quality Agent** — code-quality checks (dead code, duplication, logic errors,
   bug risks, error handling, maintainability, performance, API/contract). The
   Quality Agent is enabled by default and can be disabled or tuned per category.
+- **Testing Agent** — test-quality checks (coverage gaps, weak/missing
+  assertions, flakiness, test hygiene like stray `.only`, mocking issues, and
+  async-assertion correctness). Enabled by default; isolation and test-smell
+  checks are available but off by default.
 
 The engine uses [Groq](https://console.groq.com) for LLM inference and a
 deterministic **Evidence Validator** that never trusts LLM output alone — a
@@ -120,9 +124,14 @@ Copy `.env.example` to `.env.local` for local development. Do **not** commit
 | `AI_REVIEW_SECURITY_CATEGORIES` | No | Comma allow-list — run only these security categories. |
 | `AI_REVIEW_DISABLE_SECURITY_CATEGORIES` | No | Comma list — remove security categories from the default set. |
 | `AI_REVIEW_SECURITY_MIN_SEVERITY` | No | Drop security findings below this severity (`LOW`\|`MEDIUM`\|`HIGH`\|`CRITICAL`; default `LOW`). |
-| `AI_REVIEW_ENABLE_QUALITY` | No | Master switch for the Quality Agent (default on). `false`/`0`/`no`/`off` runs security only. |
+| `AI_REVIEW_ENABLE_QUALITY` | No | Master switch for the Quality Agent (default on). `false`/`0`/`no`/`off` disables it. |
 | `AI_REVIEW_QUALITY_CATEGORIES` | No | Comma allow-list — run only these quality categories. |
 | `AI_REVIEW_DISABLE_CATEGORIES` | No | Comma list — remove quality categories from the default set. |
+| `AI_REVIEW_ENABLE_TESTING` | No | Master switch for the Testing Agent (default on). `false`/`0`/`no`/`off` disables it. |
+| `AI_REVIEW_TESTING_CATEGORIES` | No | Comma allow-list — run only these testing categories. |
+| `AI_REVIEW_DISABLE_TESTING_CATEGORIES` | No | Comma list — remove testing categories from the default set. |
+| `AI_REVIEW_TESTING_MIN_SEVERITY` | No | Drop testing findings below this severity (`LOW`\|`MEDIUM`\|`HIGH`\|`CRITICAL`; default `LOW`). |
+| `GROQ_TESTING_MODEL` | No | Override the model for testing analysis. Falls back to `GROQ_SECURITY_MODEL`. |
 | `AI_REVIEW_QUALITY_MIN_SEVERITY` | No | Drop quality findings below this severity (`LOW`\|`MEDIUM`\|`HIGH`\|`CRITICAL`; default `LOW`). |
 | `AI_REVIEW_MAX_DIFF_CHARS` | No | Diff section limit (default 8000). |
 | `AI_REVIEW_MAX_SOURCE_CONTEXT_CHARS` | No | Source-context limit (default 12000). |
@@ -164,6 +173,26 @@ through the Evidence Validator, which confirms the file exists, the line/range i
 valid, and the reported evidence appears in the source. See
 [docs/security-agent.md](docs/security-agent.md).
 
+## Current testing checks
+
+The Testing Agent reviews test quality (single source of truth:
+`src/agents/testingCatalog.js`):
+
+| Category | Default | Examples |
+|---|---|---|
+| Test coverage | on | untested new functions, untested edge/error paths |
+| Assertions | on | tests with no assertion, weak assertions, assertion-on-mock, snapshot overuse |
+| Flakiness | on | time/randomness/order dependence, real network in unit tests, races |
+| Test hygiene | on | stray `.only`/`.skip`, empty/commented-out/duplicate tests, poor names |
+| Mocking | on | unrestored mocks, over-mocking, missing mock cleanup |
+| Async correctness | on | un-awaited async assertions, unreturned promises, missing `done()` |
+| Test data & isolation | **off** | shared mutable fixtures, hardcoded data, missing cleanup |
+| Test smells | **off** | logic in tests, multiple concerns, testing internals, trivial tests |
+
+**Limitation:** the engine does not run the suite or read coverage — coverage
+findings are inferences from the diff, not a measured delta. See
+[docs/testing-agent.md](docs/testing-agent.md).
+
 ---
 
 ## Basic testing instructions
@@ -190,6 +219,7 @@ For details see [docs/testing.md](docs/testing.md).
 - [docs/context-management.md](docs/context-management.md) — the whole-file problem, the request-size issue, and the bounded-context solution.
 - [docs/security-agent.md](docs/security-agent.md) — Security Agent, the full check catalog, category config, false-positive handling, and the validator.
 - [docs/quality-agent.md](docs/quality-agent.md) — Quality Agent, the code-quality catalog, category config, range findings, and the validator.
+- [docs/testing-agent.md](docs/testing-agent.md) — Testing Agent, the test-quality catalog, category config, and limitations.
 - [docs/testing.md](docs/testing.md) — test suite, cases, CI, and latest results.
 - [CHANGELOG.md](CHANGELOG.md) — notable changes during MVP development.
 - [integration.md](integration.md) — how a caller repository connects to the engine.

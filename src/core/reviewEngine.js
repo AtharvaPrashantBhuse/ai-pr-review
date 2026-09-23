@@ -55,8 +55,10 @@ import { buildContext }                            from './contextBuilder.js';
 import { getContextForFiles, isGenesisAvailable }  from '../genesis/genesisAdapter.js';
 import { analyseForSecurity }                      from '../agents/securityAgent.js';
 import { analyseForQuality }                        from '../agents/qualityAgent.js';
+import { analyseForTesting }                        from '../agents/testingAgent.js';
 import { resolveQualityConfig }                     from '../agents/checkCatalog.js';
 import { resolveSecurityConfig }                    from '../agents/securityCatalog.js';
+import { resolveTestingConfig }                     from '../agents/testingCatalog.js';
 import { dedupeFindings }                           from './findingDedup.js';
 import { validateFindings }                        from '../validation/evidenceValidator.js';
 import { DEFAULT_MODEL }                           from '../integrations/groq.js';
@@ -165,6 +167,9 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
   const qualityConfig  = resolveQualityConfig();
   const qualityEnabled = qualityConfig.enabled && qualityConfig.enabledTypes.size > 0;
 
+  const testingConfig  = resolveTestingConfig();
+  const testingEnabled = testingConfig.enabled && testingConfig.enabledTypes.size > 0;
+
   if (securityEnabled) {
     console.log(
       `[AI-Review] Security categories:  ${[...securityConfig.enabledCategories].join(', ')}`
@@ -183,25 +188,41 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
     console.log('[AI-Review] Quality agent:        disabled');
   }
 
-  const [securityResult, qualityResult] = await Promise.all([
+  if (testingEnabled) {
+    console.log(
+      `[AI-Review] Testing categories:   ${[...testingConfig.enabledCategories].join(', ')}`
+    );
+    console.log(`[AI-Review] Testing min severity: ${testingConfig.minSeverity}`);
+  } else {
+    console.log('[AI-Review] Testing agent:        disabled');
+  }
+
+  const [securityResult, qualityResult, testingResult] = await Promise.all([
     securityEnabled
       ? analyseForSecurity(combined, '', { config: securityConfig })
       : Promise.resolve(null),
     qualityEnabled
       ? analyseForQuality(combined, '', { config: qualityConfig })
       : Promise.resolve(null),
+    testingEnabled
+      ? analyseForTesting(combined, '', { config: testingConfig })
+      : Promise.resolve(null),
   ]);
 
-  // The review is considered to have used the LLM if either agent did.
-  const llmUsed = Boolean(securityResult?.llmUsed) || Boolean(qualityResult?.llmUsed);
+  // The review is considered to have used the LLM if any agent did.
+  const llmUsed =
+    Boolean(securityResult?.llmUsed) ||
+    Boolean(qualityResult?.llmUsed)  ||
+    Boolean(testingResult?.llmUsed);
 
-  // If neither agent produced a usable LLM result, surface the error and stop.
+  // If no agent produced a usable LLM result, surface the error and stop.
   // (When an agent is disabled its result is null and contributes no error.)
   if (!llmUsed) {
     const error =
       securityResult?.error ||
-      qualityResult?.error ||
-      'LLM analysis unavailable (both agents disabled or failed).';
+      qualityResult?.error  ||
+      testingResult?.error  ||
+      'LLM analysis unavailable (all agents disabled or failed).';
     return makeReviewResult({
       findings:         [],
       genesisAvailable,
@@ -217,11 +238,12 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
   const rawFindings = dedupeFindings([
     ...(securityResult?.findings || []),
     ...(qualityResult?.findings  || []),
+    ...(testingResult?.findings  || []),
   ]);
 
-  // Combine agent errors (e.g. one agent hit a rate limit but the other worked)
+  // Combine agent errors (e.g. one agent hit a rate limit but the others worked)
   // into a single non-fatal note so the caller still gets partial results.
-  const agentErrors = [securityResult?.error, qualityResult?.error]
+  const agentErrors = [securityResult?.error, qualityResult?.error, testingResult?.error]
     .filter(Boolean);
   const combinedError = agentErrors.length > 0 ? agentErrors.join(' | ') : null;
 
