@@ -160,6 +160,7 @@ export function buildCommentBody(results) {
       lines.push('✅ **No security or code-quality findings detected** in the changed files.');
     }
     lines.push('');
+    appendImpactSection(lines, batch);
     lines.push(buildFooter(batch));
     return lines.join('\n');
   }
@@ -242,6 +243,7 @@ export function buildCommentBody(results) {
     lines.push('');
   }
 
+  appendImpactSection(lines, batch);
   lines.push(buildFooter(batch));
   return lines.join('\n');
 }
@@ -287,6 +289,71 @@ function normaliseResults(results) {
 
   // Single ReviewResult object
   return [{ filePath: 'review', result: results }];
+}
+
+/**
+ * Append the deterministic Impact Analysis section (Genesis blast radius +
+ * dependencies) to the comment, if — and only if — impact data is present.
+ *
+ * Impact data is optional: it exists only when Genesis was active for the run.
+ * When absent, this appends nothing so the comment never shows an empty or
+ * broken-looking "Impact: none" block.
+ *
+ * The impact summary lives on each ReviewResult (`result.impact`). In a batch
+ * of per-file results, several entries may each carry their own impact summary;
+ * we merge the per-file records across the batch, de-duplicating by file path.
+ *
+ * @param {string[]} lines  - The comment lines accumulator (mutated in place)
+ * @param {Array}    batch  - Normalised Array<{ filePath, result }>
+ */
+function appendImpactSection(lines, batch) {
+  // Collect every available per-file impact record across the batch.
+  const byFile = new Map();   // file path → impact record
+  for (const { result } of batch) {
+    const impact = result?.impact;
+    if (!impact?.available || !Array.isArray(impact.files)) continue;
+    for (const rec of impact.files) {
+      if (rec?.file && !byFile.has(rec.file)) byFile.set(rec.file, rec);
+    }
+  }
+
+  if (byFile.size === 0) return;   // no impact data — omit the section entirely
+
+  const totalBlastRadius = [...byFile.values()].reduce((s, r) => s + (r.blastRadius || 0), 0);
+
+  lines.push('### 📊 Impact Analysis');
+  lines.push('');
+  lines.push(
+    `<sub>Blast radius derived from the Genesis dependency graph — ` +
+    `deterministic, no LLM.</sub>`
+  );
+  lines.push('');
+  lines.push(
+    `**${byFile.size}** changed file(s) with dependency data · ` +
+    `**${totalBlastRadius}** total dependent file reference(s).`
+  );
+  lines.push('');
+
+  for (const rec of byFile.values()) {
+    const reach = rec.blastRadius === 1 ? '1 file' : `${rec.blastRadius} files`;
+    lines.push(`- \`${rec.file}\` — imported by **${reach}** (blast radius)`);
+
+    if (rec.impactedFiles?.length > 0) {
+      const listed = rec.impactedFiles.map(p => `\`${p}\``).join(', ');
+      const more   = rec.impactedTruncated > 0 ? ` … +${rec.impactedTruncated} more` : '';
+      lines.push(`  - Impacts: ${listed}${more}`);
+    }
+
+    if (rec.dependsOn?.length > 0) {
+      const deps = rec.dependsOn.map(p => `\`${p}\``).join(', ');
+      const more = rec.dependsOnTruncated > 0 ? ` … +${rec.dependsOnTruncated} more` : '';
+      lines.push(`  - Depends on: ${deps}${more}`);
+    }
+  }
+
+  lines.push('');
+  lines.push('---');
+  lines.push('');
 }
 
 /**

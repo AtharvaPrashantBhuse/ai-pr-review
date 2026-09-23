@@ -2452,3 +2452,180 @@ describe('Test 69 — Reporter groups testing findings by category', () => {
     expect(body).toContain('Testing: Async Correctness: 1');
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 27–30 — Impact Analysis (Genesis blast radius surfaced in the comment)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { buildImpactSummary, blastRadiusForFile } from '../src/core/impactAnalysis.js';
+
+// Genesis per-file shape: { file, symbols, impact:[{path}], boundary:{dependsOn:[{target}]} }
+const GENESIS_FILES = [
+  {
+    file:    'src/auth/token.js',
+    symbols: [{ kind: 'function', name: 'signToken', line: 10 }],
+    impact:  [
+      { path: 'src/api/login.js' },
+      { path: 'src/api/refresh.js' },
+      { path: 'src/mw/authGuard.js' },
+    ],
+    boundary: {
+      dependsOn: [{ target: 'src/config.js' }, { target: 'jsonwebtoken' }],
+    },
+  },
+  {
+    file:    'src/util/noise.js',
+    symbols: [],
+    impact:  [],          // no dependents
+    boundary: { dependsOn: [] },
+  },
+];
+
+// ─── Test 27 — buildImpactSummary shapes Genesis data correctly ───────────────
+
+describe('Test 27 — buildImpactSummary: shapes Genesis per-file data', () => {
+  it('marks available and includes only files with relationship data', () => {
+    const impact = buildImpactSummary(GENESIS_FILES);
+    expect(impact.available).toBe(true);
+    // noise.js has no impact and no deps → excluded
+    expect(impact.files).toHaveLength(1);
+    expect(impact.files[0].file).toBe('src/auth/token.js');
+  });
+
+  it('computes blast radius and lists impacted files', () => {
+    const impact = buildImpactSummary(GENESIS_FILES);
+    const rec = impact.files[0];
+    expect(rec.blastRadius).toBe(3);
+    expect(rec.impactedFiles).toContain('src/api/login.js');
+    expect(rec.impactedFiles).toContain('src/mw/authGuard.js');
+  });
+
+  it('captures dependencies from boundary.dependsOn', () => {
+    const impact = buildImpactSummary(GENESIS_FILES);
+    expect(impact.files[0].dependsOn).toContain('src/config.js');
+    expect(impact.files[0].dependsOn).toContain('jsonwebtoken');
+  });
+
+  it('totalBlastRadius sums across files', () => {
+    const impact = buildImpactSummary(GENESIS_FILES);
+    expect(impact.totalBlastRadius).toBe(3);
+  });
+
+  it('returns unavailable for null / empty input', () => {
+    expect(buildImpactSummary(null).available).toBe(false);
+    expect(buildImpactSummary([]).available).toBe(false);
+    expect(buildImpactSummary(undefined).available).toBe(false);
+  });
+
+  it('returns unavailable when no file has relationship data', () => {
+    const impact = buildImpactSummary([
+      { file: 'a.js', impact: [], boundary: { dependsOn: [] } },
+    ]);
+    expect(impact.available).toBe(false);
+  });
+
+  it('truncates impacted-file list to the configured maximum', () => {
+    const orig = process.env.AI_REVIEW_IMPACT_MAX_LISTED;
+    process.env.AI_REVIEW_IMPACT_MAX_LISTED = '2';
+    try {
+      const impact = buildImpactSummary(GENESIS_FILES);
+      const rec = impact.files[0];
+      expect(rec.impactedFiles).toHaveLength(2);
+      expect(rec.impactedTruncated).toBe(1);   // 3 total − 2 listed
+    } finally {
+      if (orig !== undefined) process.env.AI_REVIEW_IMPACT_MAX_LISTED = orig;
+      else delete process.env.AI_REVIEW_IMPACT_MAX_LISTED;
+    }
+  });
+});
+
+// ─── Test 28 — blastRadiusForFile lookup ──────────────────────────────────────
+
+describe('Test 28 — blastRadiusForFile: per-file lookup', () => {
+  const impact = buildImpactSummary(GENESIS_FILES);
+
+  it('returns the blast radius for a known file', () => {
+    expect(blastRadiusForFile(impact, 'src/auth/token.js')).toBe(3);
+  });
+
+  it('returns 0 for an unknown file', () => {
+    expect(blastRadiusForFile(impact, 'src/does/not/exist.js')).toBe(0);
+  });
+
+  it('returns 0 when impact is unavailable', () => {
+    expect(blastRadiusForFile(buildImpactSummary(null), 'anything.js')).toBe(0);
+  });
+});
+
+// ─── Test 29 — Reporter renders the Impact section when data present ──────────
+
+describe('Test 29 — buildCommentBody: renders Impact Analysis when present', () => {
+  const impact = buildImpactSummary(GENESIS_FILES);
+
+  it('renders the Impact Analysis section for a result with impact data', () => {
+    const result = makeReviewResult({
+      findings:         [],
+      genesisAvailable: true,
+      llmUsed:          true,
+      error:            null,
+      durationMs:       500,
+      impact,
+    });
+    const body = buildCommentBody(result);
+    expect(body).toContain('Impact Analysis');
+    expect(body).toContain('src/auth/token.js');
+    expect(body).toContain('blast radius');
+    expect(body).toContain('src/api/login.js');   // an impacted file
+    expect(body).toContain('src/config.js');       // a dependency
+  });
+
+  it('renders Impact section alongside findings', () => {
+    const result = makeReviewResult({
+      findings: [{
+        type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+        file: 'src/auth/token.js', line: 10,
+        evidence: 'x', explanation: 'y',
+        verification: { status: 'VERIFIED', file: 'src/auth/token.js', line: 10, sourceLine: 'x' },
+      }],
+      genesisAvailable: true,
+      llmUsed:          true,
+      error:            null,
+      durationMs:       500,
+      impact,
+    });
+    const body = buildCommentBody(result);
+    expect(body).toContain('SQL_INJECTION');
+    expect(body).toContain('Impact Analysis');
+  });
+});
+
+// ─── Test 30 — Reporter omits the Impact section when data absent ─────────────
+
+describe('Test 30 — buildCommentBody: omits Impact Analysis when absent', () => {
+  it('does NOT render Impact section when impact is null', () => {
+    const result = makeReviewResult({
+      findings:         [],
+      genesisAvailable: false,
+      llmUsed:          true,
+      error:            null,
+      durationMs:       500,
+      // impact omitted → null
+    });
+    const body = buildCommentBody(result);
+    expect(body).not.toContain('Impact Analysis');
+  });
+
+  it('does NOT render Impact section when impact is unavailable', () => {
+    const result = makeReviewResult({
+      findings:         [],
+      genesisAvailable: true,
+      llmUsed:          true,
+      error:            null,
+      durationMs:       500,
+      impact:           buildImpactSummary(null),   // { available: false, ... }
+    });
+    const body = buildCommentBody(result);
+    expect(body).not.toContain('Impact Analysis');
+  });
+});

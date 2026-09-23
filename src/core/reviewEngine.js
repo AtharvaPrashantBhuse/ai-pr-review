@@ -52,6 +52,7 @@ import { resolve, relative, extname } from 'path';
 import { makeReviewContext }                       from './reviewContext.js';
 import { makeReviewResult, makeErrorResult }       from './reviewResult.js';
 import { buildContext }                            from './contextBuilder.js';
+import { buildImpactSummary }                      from './impactAnalysis.js';
 import { getContextForFiles, isGenesisAvailable }  from '../genesis/genesisAdapter.js';
 import { analyseForSecurity }                      from '../agents/securityAgent.js';
 import { analyseForQuality }                        from '../agents/qualityAgent.js';
@@ -132,13 +133,19 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
   // ── Step 1: Genesis context ───────────────────────────────────────────────
   const genesisAvailable = isGenesisAvailable(effectiveRoot);
   let genesisCtx = '';
+  // Deterministic impact summary (blast radius / dependencies). Stays at the
+  // empty default unless Genesis produces per-file relationship data.
+  let impact = buildImpactSummary(null);
 
   if (genesisAvailable && resolvedFilePaths.length > 0) {
     try {
       const genesisResult = await getContextForFiles(resolvedFilePaths, effectiveRoot);
       genesisCtx = genesisResult.summary || '';
+      // Reuse the structured per-file data Genesis already computed to build a
+      // reporter-facing impact summary. No extra queries, no LLM call.
+      impact = buildImpactSummary(genesisResult.files);
     } catch {
-      // Genesis failure is non-fatal — continue without context
+      // Genesis failure is non-fatal — continue without context or impact
     }
   }
 
@@ -266,6 +273,7 @@ export async function runReview({ diff, filePath, repoRoot } = {}) {
     llmUsed:    true,
     error:      combinedError,
     durationMs: Date.now() - start,
+    impact:     impact.available ? impact : null,
   });
 }
 

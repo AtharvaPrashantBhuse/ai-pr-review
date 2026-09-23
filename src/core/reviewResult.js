@@ -13,6 +13,9 @@
  *   llmUsed:          boolean          — whether a Groq/LLM call was made
  *   error:            string|null      — top-level error (e.g. missing API key)
  *   durationMs:       number           — wall-clock duration of the review
+ *   impact:           Object|null      — optional Genesis impact summary
+ *                                        (blast radius / dependencies); null when
+ *                                        Genesis is unavailable
  * }
  *
  * Finding shape (post-validation):
@@ -49,13 +52,16 @@
  * @param {number}  params.durationMs
  * @returns {Object}
  */
-export function makeReviewResult({ findings, genesisAvailable, llmUsed, error, durationMs }) {
+export function makeReviewResult({ findings, genesisAvailable, llmUsed, error, durationMs, impact }) {
   return {
     findings:         Array.isArray(findings) ? findings : [],
     genesisAvailable: Boolean(genesisAvailable),
     llmUsed:          Boolean(llmUsed),
     error:            error || null,
     durationMs:       typeof durationMs === 'number' ? durationMs : 0,
+    // Optional deterministic impact summary (blast radius / dependencies) from
+    // Genesis. Absent (null) when Genesis is unavailable — consumers must guard.
+    impact:           impact || null,
   };
 }
 
