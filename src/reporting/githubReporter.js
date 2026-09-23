@@ -319,39 +319,58 @@ function appendImpactSection(lines, batch) {
 
   if (byFile.size === 0) return;   // no impact data — omit the section entirely
 
-  const totalBlastRadius = [...byFile.values()].reduce((s, r) => s + (r.blastRadius || 0), 0);
-
   lines.push('### 📊 Impact Analysis');
   lines.push('');
   lines.push(
-    `<sub>Blast radius derived from the Genesis dependency graph — ` +
-    `deterministic, no LLM.</sub>`
+    `<sub>How many files import each changed file (blast radius), from the ` +
+    `Genesis dependency graph — deterministic, no LLM.</sub>`
   );
+  lines.push('');
+
+  // Sort by blast radius (highest reach first) — the changes most likely to
+  // affect the rest of the codebase surface at the top.
+  const records = [...byFile.values()].sort((a, b) => (b.blastRadius || 0) - (a.blastRadius || 0));
+
+  // Compact overview table: file → how many files it impacts / depends on.
+  lines.push('| Changed file | Blast radius | Depends on |');
+  lines.push('|---|---|---|');
+  for (const rec of records) {
+    lines.push(
+      `| \`${rec.file}\` | ${rec.blastRadius} file(s) | ${rec.dependsOn.length} dep(s) |`
+    );
+  }
   lines.push('');
   lines.push(
-    `**${byFile.size}** changed file(s) with dependency data · ` +
-    `**${totalBlastRadius}** total dependent file reference(s).`
+    `<sub>**Blast radius** = files that import the changed file (what could ` +
+    `break). **Depends on** = what the changed file imports.</sub>`
   );
   lines.push('');
 
-  for (const rec of byFile.values()) {
-    const reach = rec.blastRadius === 1 ? '1 file' : `${rec.blastRadius} files`;
-    lines.push(`- \`${rec.file}\` — imported by **${reach}** (blast radius)`);
+  // Full, expandable detail per file — nothing hidden behind un-clickable text.
+  for (const rec of records) {
+    const hasImpacts = rec.impactedFiles?.length > 0;
+    const hasDeps    = rec.dependsOn?.length > 0;
+    if (!hasImpacts && !hasDeps) continue;
 
-    if (rec.impactedFiles?.length > 0) {
-      const listed = rec.impactedFiles.map(p => `\`${p}\``).join(', ');
-      const more   = rec.impactedTruncated > 0 ? ` … +${rec.impactedTruncated} more` : '';
-      lines.push(`  - Impacts: ${listed}${more}`);
+    lines.push(`<details><summary><code>${rec.file}</code> — details</summary>`);
+    lines.push('');
+
+    if (hasImpacts) {
+      lines.push(`**Impacted by this change (${rec.impactedFiles.length}):**`);
+      rec.impactedFiles.forEach(p => lines.push(`- \`${p}\``));
+      lines.push('');
     }
 
-    if (rec.dependsOn?.length > 0) {
-      const deps = rec.dependsOn.map(p => `\`${p}\``).join(', ');
-      const more = rec.dependsOnTruncated > 0 ? ` … +${rec.dependsOnTruncated} more` : '';
-      lines.push(`  - Depends on: ${deps}${more}`);
+    if (hasDeps) {
+      lines.push(`**Depends on (${rec.dependsOn.length}):**`);
+      rec.dependsOn.forEach(p => lines.push(`- \`${p}\``));
+      lines.push('');
     }
+
+    lines.push('</details>');
+    lines.push('');
   }
 
-  lines.push('');
   lines.push('---');
   lines.push('');
 }

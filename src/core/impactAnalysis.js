@@ -92,10 +92,16 @@ export function buildImpactSummary(genesisFiles) {
     const record = {
       file:               entry.file,
       blastRadius:        impactPaths.length,
-      impactedFiles:      impactPaths.slice(0, limits.maxListed),
+      // Full lists — the reporter renders these inside an expandable <details>
+      // block, so nothing is hidden behind un-clickable "+N more" text.
+      impactedFiles:      impactPaths,
+      dependsOn:          dependsPaths,
+      // Short previews kept for any non-Markdown consumer (CLI/log) that wants
+      // a compact view without expanding the full list.
+      impactedPreview:    impactPaths.slice(0, limits.maxListed),
       impactedTruncated:  Math.max(0, impactPaths.length - limits.maxListed),
-      dependsOn:          dependsPaths.slice(0, limits.maxDepends),
-      dependsOnTruncated: Math.max(0, dependsPaths.length - limits.maxDepends),
+      dependsPreview:     dependsPaths.slice(0, limits.maxDepends),
+      dependsTruncated:   Math.max(0, dependsPaths.length - limits.maxDepends),
     };
 
     files.push(record);

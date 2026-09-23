@@ -2525,14 +2525,17 @@ describe('Test 27 — buildImpactSummary: shapes Genesis per-file data', () => {
     expect(impact.available).toBe(false);
   });
 
-  it('truncates impacted-file list to the configured maximum', () => {
+  it('keeps the full impacted-file list and a truncated preview', () => {
     const orig = process.env.AI_REVIEW_IMPACT_MAX_LISTED;
     process.env.AI_REVIEW_IMPACT_MAX_LISTED = '2';
     try {
       const impact = buildImpactSummary(GENESIS_FILES);
       const rec = impact.files[0];
-      expect(rec.impactedFiles).toHaveLength(2);
-      expect(rec.impactedTruncated).toBe(1);   // 3 total − 2 listed
+      // Full list is preserved in full so the reporter can expand it.
+      expect(rec.impactedFiles).toHaveLength(3);
+      // Preview respects the configured maximum.
+      expect(rec.impactedPreview).toHaveLength(2);
+      expect(rec.impactedTruncated).toBe(1);   // 3 total − 2 preview
     } finally {
       if (orig !== undefined) process.env.AI_REVIEW_IMPACT_MAX_LISTED = orig;
       else delete process.env.AI_REVIEW_IMPACT_MAX_LISTED;
@@ -2597,6 +2600,28 @@ describe('Test 29 — buildCommentBody: renders Impact Analysis when present', (
     const body = buildCommentBody(result);
     expect(body).toContain('SQL_INJECTION');
     expect(body).toContain('Impact Analysis');
+  });
+
+  it('renders the full impacted/dependency lists inside an expandable <details> block', () => {
+    const result = makeReviewResult({
+      findings:         [],
+      genesisAvailable: true,
+      llmUsed:          true,
+      error:            null,
+      durationMs:       500,
+      impact,
+    });
+    const body = buildCommentBody(result);
+    // Expandable disclosure instead of un-clickable "+N more" text.
+    expect(body).toContain('<details>');
+    expect(body).toContain('</details>');
+    expect(body).not.toContain('more');       // no dead "+N more" text
+    // Overview table headers present.
+    expect(body).toContain('Blast radius');
+    expect(body).toContain('Depends on');
+    // Every dependency is present in full (not truncated away).
+    expect(body).toContain('jsonwebtoken');
+    expect(body).toContain('src/config.js');
   });
 });
 
