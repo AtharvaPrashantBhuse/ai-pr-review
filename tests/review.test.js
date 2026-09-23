@@ -2654,3 +2654,95 @@ describe('Test 30 — buildCommentBody: omits Impact Analysis when absent', () =
     expect(body).not.toContain('Impact Analysis');
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 31 — Reconciliation: vulnerability in unreachable (dead) code
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Test 31 — dedupeFindings reconciliation: vuln in dead code is downgraded', () => {
+  // Mirrors the real PR case: an XSS on a line that is also DEAD_CODE because a
+  // ReferenceError above it makes the line unreachable.
+  const overlappingSpan = [
+    {
+      type: 'XSS', severity: 'HIGH', confidence: 'HIGH',
+      file: 'src/route.js', line: 130,
+      evidence: 'res.send(`<h1>Hello ${userInput}</h1>`);',
+      explanation: 'Reflected XSS.',
+    },
+    {
+      type: 'DEAD_CODE', severity: 'LOW', confidence: 'HIGH',
+      file: 'src/route.js', line: 130,
+      evidence: 'res.send(`<h1>Hello ${userInput}</h1>`);',
+      explanation: 'Unreachable — earlier ReferenceError prevents execution.',
+    },
+  ];
+
+  it('keeps the security finding as primary (security never demoted)', () => {
+    const [merged] = dedupeFindings(overlappingSpan);
+    expect(merged.type).toBe('XSS');
+  });
+
+  it('downgrades displayed severity to LOW when in dead code', () => {
+    const [merged] = dedupeFindings(overlappingSpan);
+    expect(merged.severity).toBe('LOW');
+  });
+
+  it('preserves the original severity', () => {
+    const [merged] = dedupeFindings(overlappingSpan);
+    expect(merged.originalSeverity).toBe('HIGH');
+  });
+
+  it('flags reconciled and includes an explanatory note', () => {
+    const [merged] = dedupeFindings(overlappingSpan);
+    expect(merged.reconciled).toBe(true);
+    expect(merged.reconciliationNote).toMatch(/unreachable|DEAD_CODE/i);
+  });
+
+  it('records DEAD_CODE in alsoFlaggedAs', () => {
+    const [merged] = dedupeFindings(overlappingSpan);
+    expect(merged.alsoFlaggedAs).toContain('DEAD_CODE');
+  });
+
+  it('does NOT reconcile when there is no dead-code finding on the span', () => {
+    const noDeadCode = [
+      {
+        type: 'XSS', severity: 'HIGH', confidence: 'HIGH',
+        file: 'src/route.js', line: 130,
+        evidence: 'x', explanation: 'Reflected XSS.',
+      },
+      {
+        type: 'MAGIC_NUMBER', severity: 'LOW', confidence: 'HIGH',
+        file: 'src/route.js', line: 130,
+        evidence: 'x', explanation: 'Magic number.',
+      },
+    ];
+    const [merged] = dedupeFindings(noDeadCode);
+    expect(merged.type).toBe('XSS');
+    expect(merged.severity).toBe('HIGH');       // unchanged
+    expect(merged.reconciled).toBeUndefined();
+  });
+
+  it('a standalone DEAD_CODE finding is not itself reconciled', () => {
+    const solo = [{
+      type: 'DEAD_CODE', severity: 'LOW', confidence: 'HIGH',
+      file: 'src/route.js', line: 5, evidence: 'x', explanation: 'unused',
+    }];
+    const [merged] = dedupeFindings(solo);
+    expect(merged.reconciled).toBeUndefined();
+    expect(merged.severity).toBe('LOW');
+  });
+
+  it('renders the downgrade and reconciliation note in the PR comment', () => {
+    const merged = dedupeFindings(overlappingSpan).map(f => ({
+      ...f,
+      verification: { status: 'VERIFIED', file: f.file, line: f.line, sourceLine: f.evidence },
+    }));
+    const result = makeReviewResult({
+      findings: merged, genesisAvailable: false, llmUsed: true, error: null, durationMs: 100,
+    });
+    const body = buildCommentBody(result);
+    expect(body).toContain('downgraded from');
+    expect(body).toContain('Reconciled');
+  });
+});

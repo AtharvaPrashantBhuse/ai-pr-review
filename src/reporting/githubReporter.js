@@ -189,7 +189,17 @@ export function buildCommentBody(results) {
       : `${f.line}`;
 
     lines.push(`| **Category**   | ${categoryOf(f.type)} |`);
-    lines.push(`| **Severity**   | ${sevIcon} ${f.severity} |`);
+    // When reconciled (e.g. vulnerability in unreachable code) show the
+    // downgraded severity together with the original for transparency.
+    if (f.reconciled && f.originalSeverity) {
+      const origIcon = SEV_ICON[f.originalSeverity] || '⚪';
+      lines.push(
+        `| **Severity**   | ${sevIcon} ${f.severity} ` +
+        `<sub>(downgraded from ${origIcon} ${f.originalSeverity})</sub> |`
+      );
+    } else {
+      lines.push(`| **Severity**   | ${sevIcon} ${f.severity} |`);
+    }
     lines.push(`| **Confidence** | ${f.confidence} |`);
     lines.push(`| **File**       | \`${f.file}\` |`);
     lines.push(`| **Line${f.endLine && f.endLine > f.line ? 's' : ''}**       | ${lineLabel} |`);
@@ -210,6 +220,11 @@ export function buildCommentBody(results) {
     lines.push('');
     lines.push(f.explanation || '(no explanation)');
     lines.push('');
+
+    if (f.reconciled && f.reconciliationNote) {
+      lines.push(`> ℹ️ **Reconciled:** ${f.reconciliationNote}`);
+      lines.push('');
+    }
 
     if (f.verification?.status === 'VERIFIED' && f.verification.sourceLine) {
       lines.push('<details><summary>Verified source line</summary>');

@@ -26,6 +26,20 @@
  *   - The primary keeps its own type/severity/evidence/etc. The distinct types
  *     of the merged findings are recorded on `primary.alsoFlaggedAs`.
  *
+ * Reconciliation of contradictory findings:
+ *   A group can contain findings that contradict each other — most importantly,
+ *   a vulnerability (e.g. XSS) on a line that another finding marks as DEAD_CODE
+ *   / unreachable. A critical vulnerability in code that can never execute is
+ *   not exploitable as written, and reporting it as CRITICAL misleads reviewers.
+ *
+ *   When the primary sits in a group that also flags the span as DEAD_CODE (and
+ *   the primary itself is not the DEAD_CODE finding), the primary is reconciled:
+ *     - its displayed `severity` is downgraded to LOW,
+ *     - the original severity is preserved on `originalSeverity`,
+ *     - `reconciled: true` and a human-readable `reconciliationNote` are added.
+ *   No finding is dropped and no evidence is lost — only the displayed severity
+ *   and an explanatory note change.
+ *
  * The function is order-stable: output order follows the primary findings'
  * first appearance in the input.
  */
@@ -34,6 +48,9 @@ import { ALL_SECURITY_TYPES } from '../agents/securityCatalog.js';
 
 const SEVERITY_RANK   = { LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 };
 const CONFIDENCE_RANK = { LOW: 1, MEDIUM: 2, HIGH: 3 };
+
+// Finding type that signals a span is unreachable / has no effect.
+const UNREACHABLE_TYPE = 'DEAD_CODE';
 
 function sevRank(f)  { return SEVERITY_RANK[String(f.severity   || '').toUpperCase()] || 0; }
 function confRank(f) { return CONFIDENCE_RANK[String(f.confidence || '').toUpperCase()] || 0; }
@@ -109,6 +126,42 @@ export function dedupeFindings(findings) {
       ),
     ];
 
-    return alsoFlaggedAs.length > 0 ? { ...primary, alsoFlaggedAs } : { ...primary };
+    let result = alsoFlaggedAs.length > 0 ? { ...primary, alsoFlaggedAs } : { ...primary };
+
+    // Reconcile: if the span is flagged unreachable by a DIFFERENT finding and
+    // the primary itself is not the dead-code finding, downgrade the primary's
+    // displayed severity — a vulnerability in unreachable code is not
+    // exploitable as written.
+    const flaggedUnreachable = members.some(
+      m => m !== primary && m.type === UNREACHABLE_TYPE
+    );
+    if (flaggedUnreachable && primary.type !== UNREACHABLE_TYPE) {
+      result = reconcileUnreachable(result);
+    }
+
+    return result;
   });
+}
+
+/**
+ * Downgrade a finding that sits in code flagged as unreachable / dead.
+ * Preserves the original severity and records why the change was made.
+ *
+ * @param {Object} finding
+ * @returns {Object} a new finding object with reconciliation metadata
+ */
+function reconcileUnreachable(finding) {
+  // Already LOW — nothing to downgrade, but still annotate so the reader knows.
+  const originalSeverity = String(finding.severity || '').toUpperCase();
+
+  return {
+    ...finding,
+    severity:           'LOW',
+    originalSeverity,
+    reconciled:         true,
+    reconciliationNote:
+      `Located in code flagged as ${UNREACHABLE_TYPE} (unreachable). ` +
+      `Not exploitable as written — resolve the unreachable-code issue first. ` +
+      `Original severity: ${originalSeverity}.`,
+  };
 }
