@@ -15,13 +15,25 @@
  *   Review Engine
  *        ↓  ReviewResult
  *   githubReporter.reportToPR()
+ *        ├─ buildCommentBody()       → postPRComment()       (body summary)
+ *        └─ buildInlineComments()    → createPullRequestReview() (per-line)
  *        ↓
- *   github.js (postPRComment)
- *        ↓
- *   GitHub API  →  PR comment on CALLER repository
+ *   GitHub API  →  PR comment + inline review comments on CALLER repository
  *
  * Permissions required on the CALLER repository's GITHUB_TOKEN:
  *   pull-requests: write
+ *
+ * Inline comment behaviour:
+ *   - A GitHub PR review (COMMENT event — never APPROVE or REQUEST_CHANGES) is
+ *     created with one inline comment per VERIFIED finding whose file:line falls
+ *     inside the diff (changed or context lines).
+ *   - Findings whose line is NOT in the diff (e.g. pre-existing lines outside
+ *     all hunks) can't receive inline comments — GitHub returns 422 for those.
+ *     They remain fully described in the body summary comment.
+ *   - The body summary is always posted, even when every finding gets an
+ *     inline comment, so reviewers have a single consolidated view.
+ *   - If inline comment creation fails (network error, missing diff, etc.) the
+ *     failure is logged and the body summary is still posted — it is non-fatal.
  *
  * Cross-repository note (important):
  *   When called from the reusable workflow, the owner/repo/prNumber are
@@ -30,7 +42,12 @@
  *   (ai-pr-review) repository.
  */
 
-import { postPRComment, isGitHubAvailable } from '../integrations/github.js';
+import {
+  postPRComment,
+  getPR,
+  createPullRequestReview,
+  isGitHubAvailable,
+} from '../integrations/github.js';
 import { categoryMetaForType }              from '../agents/checkCatalog.js';
 import {
   ALL_SECURITY_TYPES,
@@ -40,6 +57,7 @@ import {
   ALL_TESTING_TYPES,
   testingCategoryMetaForType,
 } from '../agents/testingCatalog.js';
+import { buildInDiffLineMap }               from '../core/contextBuilder.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Severity icons — Unicode works in GitHub Markdown
@@ -81,24 +99,41 @@ function categoryOf(type) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Format a ReviewResult (or array of per-file results) into a Markdown comment
- * and post it on the specified Pull Request.
+ * Format a ReviewResult (or array of per-file results) and post it on the
+ * specified Pull Request in two complementary forms:
+ *
+ *   1. Inline review comments — one comment anchored to each finding's line
+ *      in the diff. Only VERIFIED findings whose file:line are inside the diff
+ *      receive an inline comment (GitHub rejects out-of-diff lines with 422).
+ *      All inline comments are submitted in a single PR Review (COMMENT event).
+ *
+ *   2. Body summary comment — the existing full-detail summary that lists
+ *      every finding regardless of in-diff status. Always posted.
+ *
+ * Inline comment creation is non-fatal: if it fails (e.g. no PR diff available,
+ * GitHub API error, missing commit SHA) the failure is logged and the body
+ * summary is still posted so the reviewer never loses findings.
  *
  * @param {Object} params
  * @param {string}         params.owner     - Repository owner (from CALLER event)
  * @param {string}         params.repo      - Repository name  (from CALLER event)
  * @param {number}         params.prNumber  - Pull Request number (from CALLER event)
  * @param {Object|Array}   params.results   - ReviewResult OR Array<{filePath, result}>
- * @returns {Promise<Object|null>} The created GitHub comment object, or null on failure
+ * @param {string}         [params.diff]    - Raw PR diff text (pr-diff.txt content).
+ *                                            When provided, VERIFIED findings whose
+ *                                            line is in-diff also receive an inline
+ *                                            review comment. When absent, only the
+ *                                            body summary is posted.
+ * @returns {Promise<{ summaryComment: Object|null, review: Object|null }>}
  */
-export async function reportToPR({ owner, repo, prNumber, results }) {
+export async function reportToPR({ owner, repo, prNumber, results, diff }) {
   if (!isGitHubAvailable()) {
     console.warn(
       '[GitHubReporter] GITHUB_TOKEN is not set — skipping PR comment.\n' +
       '                 In GitHub Actions this token is injected automatically.\n' +
       '                 For local testing, set GITHUB_TOKEN to a PAT with repo scope.'
     );
-    return null;
+    return { summaryComment: null, review: null };
   }
 
   if (!owner || !repo || !prNumber) {
@@ -108,16 +143,85 @@ export async function reportToPR({ owner, repo, prNumber, results }) {
     );
   }
 
-  const body = buildCommentBody(results);
+  // ── 1. Body summary comment (always posted) ───────────────────────────────
+  const bodyText = buildCommentBody(results);
+  let summaryComment = null;
 
   try {
-    const comment = await postPRComment(owner, repo, prNumber, body);
-    console.log(`[GitHubReporter] Posted review comment on ${owner}/${repo}#${prNumber}`);
-    return comment;
+    summaryComment = await postPRComment(owner, repo, prNumber, bodyText);
+    console.log(`[GitHubReporter] Posted summary comment on ${owner}/${repo}#${prNumber}`);
   } catch (err) {
-    console.error(`[GitHubReporter] Failed to post PR comment: ${err.message}`);
-    throw err;
+    console.error(`[GitHubReporter] Failed to post summary comment: ${err.message}`);
+    throw err;   // summary is the primary output — propagate this failure
   }
+
+  // ── 2. Inline review comments (best-effort, non-fatal) ───────────────────
+  let review = null;
+
+  if (!diff || !diff.trim()) {
+    console.log('[GitHubReporter] No diff provided — skipping inline comments.');
+    return { summaryComment, review };
+  }
+
+  try {
+    // Build the in-diff line map so we know which finding lines GitHub accepts.
+    const inDiffMap = buildInDiffLineMap(diff);
+
+    // Collect all findings across the (possibly batched) results.
+    const batch       = normaliseResults(results);
+    const allFindings = batch.flatMap(({ result }) => result.findings || []);
+
+    // Only VERIFIED findings whose line is in the diff get inline comments.
+    // UNVERIFIED findings may have wrong file/line, so we never try to anchor them.
+    const inlineable = allFindings.filter(f => {
+      if (f.verification?.status !== 'VERIFIED') return false;
+      const fileLines = inDiffMap.get(f.file);
+      if (!fileLines) return false;
+      // For range findings use the start line; if that's not in-diff, skip.
+      return fileLines.has(f.line);
+    });
+
+    if (inlineable.length === 0) {
+      console.log('[GitHubReporter] No in-diff VERIFIED findings — skipping inline comments.');
+      return { summaryComment, review };
+    }
+
+    // Fetch the HEAD commit SHA — required by the reviews endpoint.
+    const pr       = await getPR(owner, repo, prNumber);
+    const commitId = pr?.head?.sha;
+
+    if (!commitId) {
+      console.warn('[GitHubReporter] Could not read PR commit SHA — skipping inline comments.');
+      return { summaryComment, review };
+    }
+
+    // Build the inline comments array.
+    const comments = inlineable.map((f, idx) => ({
+      path: f.file,
+      line: f.line,
+      side: 'RIGHT',
+      body: buildInlineCommentBody(f, allFindings.indexOf(f) + 1),
+    }));
+
+    // Post one PR review containing all inline comments.
+    // event='COMMENT' — informational only; never approves or blocks the PR.
+    review = await createPullRequestReview(owner, repo, prNumber, {
+      commitId,
+      body:     '',    // top-level review body intentionally blank — summary comment covers it
+      comments,
+      event:    'COMMENT',
+    });
+
+    console.log(
+      `[GitHubReporter] Posted ${comments.length} inline comment(s) on ` +
+      `${owner}/${repo}#${prNumber}`
+    );
+  } catch (err) {
+    // Inline failure is non-fatal — the body summary is already posted.
+    console.error(`[GitHubReporter] Inline comments failed (non-fatal): ${err.message}`);
+  }
+
+  return { summaryComment, review };
 }
 
 /**
@@ -266,6 +370,61 @@ export function buildCommentBody(results) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build the Markdown body for a single inline PR review comment.
+ *
+ * Kept intentionally compact — the developer is already looking at the code
+ * line; they do not need the full finding table repeated here. The comment
+ * gives them the category, severity, a one-line evidence snippet, the
+ * explanation, and the verification status so they know whether to act on it.
+ * A cross-reference to the finding number in the summary helps them navigate
+ * to the full detail if they want it.
+ *
+ * @param {Object} finding   - Post-validation finding (has .verification etc.)
+ * @param {number} findingNo - 1-based index in the full findings list (for cross-ref)
+ * @returns {string} Markdown string suitable for a GitHub review comment body
+ */
+export function buildInlineCommentBody(finding, findingNo) {
+  const sevIcon  = SEV_ICON[finding.severity] || '⚪';
+  const verBadge = finding.verification?.status === 'VERIFIED' ? '✅ VERIFIED' : '❌ UNVERIFIED';
+  const category = categoryOf(finding.type);
+  const lineRef  = finding.endLine && finding.endLine > finding.line
+    ? `lines ${finding.line}–${finding.endLine}`
+    : `line ${finding.line}`;
+
+  const lines = [];
+
+  // Compact header — category + type + severity on one line
+  lines.push(
+    `**${category} · ${finding.type}** &nbsp; ${sevIcon} ${finding.severity} &nbsp; ${verBadge}`
+  );
+  lines.push('');
+
+  // Evidence block
+  lines.push('```');
+  lines.push(finding.evidence || '(no evidence)');
+  lines.push('```');
+  lines.push('');
+
+  // Explanation (the most important part for the developer)
+  lines.push(finding.explanation || '(no explanation)');
+  lines.push('');
+
+  // Additional merged types, if any
+  if (Array.isArray(finding.alsoFlaggedAs) && finding.alsoFlaggedAs.length > 0) {
+    lines.push(`_Also flagged as: ${finding.alsoFlaggedAs.join(', ')}_`);
+    lines.push('');
+  }
+
+  // Cross-reference to the summary comment
+  lines.push(
+    `<sub>Finding #${findingNo} · ${lineRef} · ` +
+    `See the summary comment for full details.</sub>`
+  );
+
+  return lines.join('\n');
+}
 
 /**
  * Build the "Security: n · Correctness: n · ..." breakdown line, listing only

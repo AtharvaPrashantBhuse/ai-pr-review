@@ -3,7 +3,8 @@
 **Central AI Pull Request Review Engine**
 
 A reusable, repository-independent engine that reviews the changed code in a
-Pull Request and posts its findings back as a PR comment. It runs two analysis
+Pull Request and posts its findings back as both **inline code comments** on the
+relevant diff lines and a **summary PR comment**. It runs three analysis
 agents over the diff and verifies every finding against the actual source before
 reporting it:
 
@@ -63,7 +64,7 @@ Security Agent + Quality Agent  → Groq / LLM  → structured findings
 Evidence Validator   → VERIFIED / UNVERIFIED (deterministic, no LLM)
       │
       ▼
-GitHub Reporter      → PR comment on the caller repository
+GitHub Reporter      → inline review comments + summary comment on the caller repository
 ```
 
 The engine can also run locally against a file or a diff via the CLI (below).

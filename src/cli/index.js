@@ -182,8 +182,11 @@ function printSkipped(skipped) {
  * Non-fatal — logs a warning and continues if vars are missing.
  *
  * @param {Array<{ filePath: string, result: Object }>} allResults
+ * @param {string} [diff] - Raw PR diff text (pr-diff.txt content).
+ *                          When provided, VERIFIED in-diff findings also get
+ *                          an inline review comment in addition to the summary.
  */
-async function maybeReportToPR(allResults) {
+async function maybeReportToPR(allResults, diff) {
   const prNumber = parseInt(process.env.PR_NUMBER,  10) || null;
   const owner    = process.env.PR_REPO_OWNER         || null;
   const repo     = process.env.PR_REPO_NAME          || null;
@@ -197,7 +200,7 @@ async function maybeReportToPR(allResults) {
   }
 
   try {
-    await reportToPR({ owner, repo, prNumber, results: allResults });
+    await reportToPR({ owner, repo, prNumber, results: allResults, diff });
   } catch (err) {
     console.error(`Error posting PR comment: ${err.message}`);
     // Non-fatal — the review output is already in the log
@@ -250,7 +253,7 @@ if (diffFile) {
   printSummary(allResults, []);
 
   if (reportToPRFlag) {
-    await maybeReportToPR(allResults);
+    await maybeReportToPR(allResults, diffText);
   }
 
   // Exit 1 only when the LLM call itself failed entirely (no analysis performed)

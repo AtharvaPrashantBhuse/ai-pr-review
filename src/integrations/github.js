@@ -148,6 +148,62 @@ export async function getPRFiles(owner, repo, prNumber) {
 }
 
 /**
+ * Get a single Pull Request by number.
+ *
+ * Used to retrieve the HEAD commit SHA (pr.head.sha) required by the
+ * pull-request review creation endpoint.
+ *
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} prNumber
+ * @returns {Promise<Object>} Pull request object (includes .head.sha)
+ */
+export async function getPR(owner, repo, prNumber) {
+  return githubFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`);
+}
+
+/**
+ * Create a pull-request review with optional inline line comments.
+ *
+ * Uses the Reviews endpoint rather than the Issues comments endpoint so each
+ * finding can be anchored directly to its line in the diff. All comments are
+ * submitted in a single API call.
+ *
+ * Inline comment shape (each item in `comments`):
+ *   path   — relative file path (no "a/" or "b/" prefix)
+ *   line   — 1-based line number on the RIGHT (new-file) side
+ *   side   — always "RIGHT" (targeting the new version of the file)
+ *   body   — Markdown string for the comment
+ *
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} prNumber
+ * @param {Object} params
+ * @param {string}   params.commitId  - HEAD SHA of the PR branch
+ * @param {string}   [params.body]    - Optional top-level review body
+ * @param {Array}    params.comments  - Inline comment objects (may be empty)
+ * @param {string}   [params.event]   - "COMMENT" | "APPROVE" | "REQUEST_CHANGES"
+ *                                      Defaults to "COMMENT" (informational only)
+ * @returns {Promise<Object>} Created review object
+ */
+export async function createPullRequestReview(
+  owner,
+  repo,
+  prNumber,
+  { commitId, body = '', comments = [], event = 'COMMENT' }
+) {
+  return githubFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
+    method: 'POST',
+    body:   JSON.stringify({
+      commit_id: commitId,
+      body,
+      comments,
+      event,
+    }),
+  });
+}
+
+/**
  * Check whether GitHub integration is available (token present).
  * Does not make a network request.
  *

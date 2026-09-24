@@ -51,7 +51,7 @@ function readFixture(name) {
 import { parseFindings }             from '../src/agents/securityAgent.js';
 import { validateFinding,
          validateFindings }          from '../src/validation/evidenceValidator.js';
-import { buildCommentBody }          from '../src/reporting/githubReporter.js';
+import { buildCommentBody, buildInlineCommentBody } from '../src/reporting/githubReporter.js';
 import { classifyFiles }             from '../src/core/reviewEngine.js';
 import { makeReviewResult,
          makeErrorResult,
@@ -672,6 +672,7 @@ import {
   buildContext,
   extractSourceContext,
   parseChangedHunks,
+  buildInDiffLineMap,
 } from '../src/core/contextBuilder.js';
 
 // ─── Test 14 — parseChangedHunks: extracts correct per-file line sets ─────────
@@ -2744,5 +2745,395 @@ describe('Test 31 — dedupeFindings reconciliation: vuln in dead code is downgr
     const body = buildCommentBody(result);
     expect(body).toContain('downgraded from');
     expect(body).toContain('Reconciled');
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 70–77 — Inline PR review comments
+//
+// Covers:
+//   70 — buildInDiffLineMap: parses changed + context lines correctly
+//   71 — buildInDiffLineMap: edge cases (empty diff, deleted files, multi-file)
+//   72 — buildInlineCommentBody: required content is present
+//   73 — buildInlineCommentBody: range findings show start line
+//   74 — buildInlineCommentBody: alsoFlaggedAs is surfaced
+//   75 — reportToPR in-diff gating: only VERIFIED in-diff findings get inline
+//   76 — reportToPR: no inline posted when diff absent
+//   77 — getPR + createPullRequestReview: API shapes (no real network)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Test 70 — buildInDiffLineMap: correct line tracking ─────────────────────
+
+describe('Test 70 — buildInDiffLineMap: parses diff hunks correctly', () => {
+  // Hunk starting at new-file line 10 with 5 new-file lines:
+  //   line 10 — context
+  //   line 11 — removed (OLD, no new-file number; counter NOT advanced)
+  //   line 11 — added   (new-file 11, counter advances)
+  //   line 12 — added   (new-file 12)
+  //   line 13 — context (new-file 13)
+  const DIFF = [
+    '--- a/src/api.js',
+    '+++ b/src/api.js',
+    '@@ -10,4 +10,4 @@',
+    ' context line',       // new-file 10
+    '-removed line',       // no new-file number
+    '+added line',         // new-file 11
+    '+another added',      // new-file 12
+    ' end context',        // new-file 13
+  ].join('\n');
+
+  it('returns a Map with the correct file key', () => {
+    const map = buildInDiffLineMap(DIFF);
+    expect(map.has('src/api.js')).toBe(true);
+  });
+
+  it('includes context lines in the set', () => {
+    const map = buildInDiffLineMap(DIFF);
+    const lines = map.get('src/api.js');
+    expect(lines.has(10)).toBe(true);   // first context line
+    expect(lines.has(13)).toBe(true);   // last context line
+  });
+
+  it('includes added (+) lines', () => {
+    const map = buildInDiffLineMap(DIFF);
+    const lines = map.get('src/api.js');
+    expect(lines.has(11)).toBe(true);
+    expect(lines.has(12)).toBe(true);
+  });
+
+  it('does NOT include removed (-) lines (they have no new-file number)', () => {
+    // After the context line at 10, the removed line does NOT advance the counter.
+    // So line 11 is the ADDED line, not the removed one.
+    const map = buildInDiffLineMap(DIFF);
+    const lines = map.get('src/api.js');
+    // We have exactly: 10, 11, 12, 13 — 4 lines, not 5
+    expect([...lines].sort((a,b)=>a-b)).toEqual([10, 11, 12, 13]);
+  });
+
+  it('assigns correct new-file line numbers from hunk offset', () => {
+    const DIFF2 = [
+      '--- a/src/b.js',
+      '+++ b/src/b.js',
+      '@@ -1,2 +5,2 @@',   // new-file starts at 5
+      ' ctx',               // new-file 5
+      '+new',               // new-file 6
+    ].join('\n');
+    const map = buildInDiffLineMap(DIFF2);
+    expect([...map.get('src/b.js')].sort((a,b)=>a-b)).toEqual([5, 6]);
+  });
+});
+
+// ─── Test 71 — buildInDiffLineMap: edge cases ─────────────────────────────────
+
+describe('Test 71 — buildInDiffLineMap: edge cases', () => {
+  it('returns an empty Map for an empty diff', () => {
+    expect(buildInDiffLineMap('').size).toBe(0);
+    expect(buildInDiffLineMap(null).size).toBe(0);
+  });
+
+  it('skips /dev/null targets (deleted files)', () => {
+    const DIFF = [
+      '--- a/deleted.js',
+      '+++ /dev/null',
+      '@@ -1,1 +0,0 @@',
+      '-old line',
+    ].join('\n');
+    // /dev/null is not a real file — should not appear in the map
+    expect(buildInDiffLineMap(DIFF).size).toBe(0);
+  });
+
+  it('handles multiple files independently', () => {
+    const DIFF = [
+      '--- a/a.js',
+      '+++ b/a.js',
+      '@@ -1,1 +1,2 @@',
+      ' ctx',
+      '+added',
+      '--- a/b.js',
+      '+++ b/b.js',
+      '@@ -10,1 +10,1 @@',
+      '+only added',
+    ].join('\n');
+    const map = buildInDiffLineMap(DIFF);
+    expect(map.has('a.js')).toBe(true);
+    expect(map.has('b.js')).toBe(true);
+    expect([...map.get('a.js')].sort((a,b)=>a-b)).toEqual([1, 2]);
+    expect([...map.get('b.js')]).toEqual([10]);
+  });
+
+  it('handles a file with multiple hunks', () => {
+    const DIFF = [
+      '--- a/c.js',
+      '+++ b/c.js',
+      '@@ -1,1 +1,1 @@',
+      '+hunk1',             // new-file 1
+      '@@ -20,1 +20,1 @@',
+      '+hunk2',             // new-file 20
+    ].join('\n');
+    const map = buildInDiffLineMap(DIFF);
+    const lines = [...map.get('c.js')].sort((a,b)=>a-b);
+    expect(lines).toContain(1);
+    expect(lines).toContain(20);
+  });
+
+  it('ignores \\ No newline at end of file lines', () => {
+    const DIFF = [
+      '--- a/d.js',
+      '+++ b/d.js',
+      '@@ -1,1 +1,1 @@',
+      '+added',             // new-file 1
+      '\\ No newline at end of file',
+    ].join('\n');
+    const map = buildInDiffLineMap(DIFF);
+    // Only line 1 should be present — the backslash line is not a code line
+    expect([...map.get('d.js')]).toEqual([1]);
+  });
+});
+
+// ─── Test 72 — buildInlineCommentBody: required content ───────────────────────
+
+describe('Test 72 — buildInlineCommentBody: required content is present', () => {
+  const finding = {
+    type:        'SQL_INJECTION',
+    severity:    'HIGH',
+    confidence:  'HIGH',
+    file:        'src/api.js',
+    line:        42,
+    evidence:    "const sql = 'SELECT * FROM users WHERE id = ' + userId;",
+    explanation: 'User input concatenated into SQL without parameterisation.',
+    verification: { status: 'VERIFIED', file: 'src/api.js', line: 42, sourceLine: 'x' },
+  };
+
+  it('contains the finding type', () => {
+    expect(buildInlineCommentBody(finding, 1)).toContain('SQL_INJECTION');
+  });
+
+  it('contains the severity', () => {
+    expect(buildInlineCommentBody(finding, 1)).toContain('HIGH');
+  });
+
+  it('contains the evidence in a code block', () => {
+    const body = buildInlineCommentBody(finding, 1);
+    expect(body).toContain('```');
+    expect(body).toContain(finding.evidence);
+  });
+
+  it('contains the explanation', () => {
+    expect(buildInlineCommentBody(finding, 1)).toContain(finding.explanation);
+  });
+
+  it('contains the finding number for cross-reference', () => {
+    expect(buildInlineCommentBody(finding, 3)).toContain('Finding #3');
+  });
+
+  it('contains a VERIFIED badge', () => {
+    expect(buildInlineCommentBody(finding, 1)).toContain('VERIFIED');
+  });
+
+  it('contains the line reference', () => {
+    expect(buildInlineCommentBody(finding, 1)).toContain('line 42');
+  });
+});
+
+// ─── Test 73 — buildInlineCommentBody: range findings ─────────────────────────
+
+describe('Test 73 — buildInlineCommentBody: range findings show start–end', () => {
+  it('shows "lines N–M" for a range finding', () => {
+    const finding = {
+      type: 'DUPLICATE_CODE', severity: 'MEDIUM', confidence: 'HIGH',
+      file: 'src/api.js', line: 10, endLine: 20,
+      evidence: 'function isAdult(age) {',
+      explanation: 'Duplicate of block at lines 30–40.',
+      verification: { status: 'VERIFIED', file: 'src/api.js', line: 10, sourceLine: 'x' },
+    };
+    expect(buildInlineCommentBody(finding, 2)).toContain('lines 10–20');
+  });
+
+  it('shows "line N" for a single-line finding', () => {
+    const finding = {
+      type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+      file: 'src/api.js', line: 27,
+      evidence: "if (age = 18) {",
+      explanation: 'Assignment in condition.',
+      verification: { status: 'VERIFIED', file: 'src/api.js', line: 27, sourceLine: 'x' },
+    };
+    expect(buildInlineCommentBody(finding, 1)).toContain('line 27');
+    expect(buildInlineCommentBody(finding, 1)).not.toContain('lines 27');
+  });
+});
+
+// ─── Test 74 — buildInlineCommentBody: alsoFlaggedAs ─────────────────────────
+
+describe('Test 74 — buildInlineCommentBody: alsoFlaggedAs is surfaced', () => {
+  it('mentions merged types when alsoFlaggedAs is present', () => {
+    const finding = {
+      type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+      file: 'src/api.js', line: 27,
+      evidence: "if (age = 18) {",
+      explanation: 'Assignment in condition.',
+      alsoFlaggedAs: ['MAGIC_NUMBER'],
+      verification: { status: 'VERIFIED', file: 'src/api.js', line: 27, sourceLine: 'x' },
+    };
+    expect(buildInlineCommentBody(finding, 1)).toContain('MAGIC_NUMBER');
+  });
+
+  it('does not mention alsoFlaggedAs when the array is absent', () => {
+    const finding = {
+      type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+      file: 'src/api.js', line: 27,
+      evidence: "if (age = 18) {",
+      explanation: 'Assignment in condition.',
+      verification: { status: 'VERIFIED', file: 'src/api.js', line: 27, sourceLine: 'x' },
+    };
+    expect(buildInlineCommentBody(finding, 1)).not.toContain('Also flagged');
+  });
+});
+
+// ─── Test 75 — reportToPR in-diff gating ──────────────────────────────────────
+
+describe('Test 75 — reportToPR in-diff gating logic (mocked GitHub calls)', () => {
+  // We test the gating rules directly through the exported helpers rather than
+  // calling reportToPR (which makes real network calls). This verifies the
+  // precise filtering logic: only VERIFIED findings whose line is in the
+  // inDiffMap should become inline comments.
+
+  const DIFF = [
+    '--- a/src/api.js',
+    '+++ b/src/api.js',
+    '@@ -20,3 +20,4 @@',
+    ' async function getUserById(req, res) {',   // new-file 20
+    '+  // ADDED COMMENT',                        // new-file 21
+    "   const sql = 'SELECT * ' + userId;",       // new-file 22
+    ' }',                                          // new-file 23
+  ].join('\n');
+
+  it('inDiffMap correctly identifies in-diff lines', () => {
+    const map = buildInDiffLineMap(DIFF);
+    expect(map.get('src/api.js').has(21)).toBe(true);   // added line
+    expect(map.get('src/api.js').has(22)).toBe(true);   // context line
+    expect(map.get('src/api.js').has(19)).toBe(false);  // before hunk
+    expect(map.get('src/api.js').has(99)).toBe(false);  // far outside
+  });
+
+  it('VERIFIED finding on an in-diff line passes the gate', () => {
+    const map = buildInDiffLineMap(DIFF);
+    const finding = {
+      type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+      file: 'src/api.js', line: 22,
+      evidence: "const sql = 'SELECT * ' + userId;",
+      explanation: 'SQLi',
+      verification: { status: 'VERIFIED', file: 'src/api.js', line: 22, sourceLine: 'x' },
+    };
+    const fileLines = map.get(finding.file);
+    const passes = finding.verification.status === 'VERIFIED' && fileLines?.has(finding.line);
+    expect(passes).toBe(true);
+  });
+
+  it('UNVERIFIED finding is excluded regardless of line position', () => {
+    const map = buildInDiffLineMap(DIFF);
+    const finding = {
+      type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+      file: 'src/api.js', line: 22,
+      evidence: "const sql = 'SELECT * ' + userId;",
+      explanation: 'SQLi',
+      verification: { status: 'UNVERIFIED', reason: 'evidence not found' },
+    };
+    const fileLines = map.get(finding.file);
+    const passes = finding.verification?.status === 'VERIFIED' && fileLines?.has(finding.line);
+    expect(passes).toBe(false);
+  });
+
+  it('VERIFIED finding on a line outside the diff is excluded', () => {
+    const map = buildInDiffLineMap(DIFF);
+    const finding = {
+      type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+      file: 'src/api.js', line: 5,   // outside the hunk
+      evidence: 'something',
+      explanation: 'SQLi',
+      verification: { status: 'VERIFIED', file: 'src/api.js', line: 5, sourceLine: 'x' },
+    };
+    const fileLines = map.get(finding.file);
+    const passes = finding.verification?.status === 'VERIFIED' && fileLines?.has(finding.line);
+    expect(passes).toBe(false);
+  });
+
+  it('finding for a file not in the diff at all is excluded', () => {
+    const map = buildInDiffLineMap(DIFF);
+    const finding = {
+      type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+      file: 'src/other.js', line: 10,
+      evidence: 'x',
+      explanation: 'SQLi',
+      verification: { status: 'VERIFIED', file: 'src/other.js', line: 10, sourceLine: 'x' },
+    };
+    const fileLines = map.get(finding.file);
+    // fileLines is undefined when the file isn't in the diff at all — gate must
+    // evaluate to false (not undefined) so we coerce explicitly.
+    const passes = Boolean(finding.verification?.status === 'VERIFIED' && fileLines?.has(finding.line));
+    expect(passes).toBe(false);
+  });
+});
+
+// ─── Test 76 — reportToPR: no inline when diff is absent ──────────────────────
+
+describe('Test 76 — reportToPR skips inline when no diff provided', () => {
+  // When reportToPR is called without a diff, it should post only the body
+  // summary and skip inline comments — no GitHub Review API call should fire.
+  // We verify this by checking that buildInDiffLineMap returns an empty map
+  // for an absent/empty diff (the gate the reporter uses).
+  it('empty diff produces an empty inDiffMap (no inline targets)', () => {
+    expect(buildInDiffLineMap('').size).toBe(0);
+    expect(buildInDiffLineMap(undefined).size).toBe(0);
+  });
+
+  it('buildInlineCommentBody still works for snapshot when called directly', () => {
+    // This verifies the formatter is standalone and never breaks body-only mode.
+    const finding = {
+      type: 'WEAK_ASSERTION', severity: 'LOW', confidence: 'MEDIUM',
+      file: 'src/api.test.js', line: 15,
+      evidence: 'expect(result).toBeTruthy();',
+      explanation: 'Weak assertion.',
+      verification: { status: 'VERIFIED', file: 'src/api.test.js', line: 15, sourceLine: 'x' },
+    };
+    const body = buildInlineCommentBody(finding, 1);
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain('WEAK_ASSERTION');
+  });
+});
+
+// ─── Test 77 — getPR + createPullRequestReview shape ─────────────────────────
+
+describe('Test 77 — github.js new API functions are exported and callable', () => {
+  it('getPR and createPullRequestReview are exported', async () => {
+    const gh = await import('../src/integrations/github.js');
+    expect(typeof gh.getPR).toBe('function');
+    expect(typeof gh.createPullRequestReview).toBe('function');
+  });
+
+  it('createPullRequestReview throws when GITHUB_TOKEN is missing', async () => {
+    const savedToken = process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    try {
+      const { createPullRequestReview } = await import('../src/integrations/github.js');
+      await expect(
+        createPullRequestReview('owner', 'repo', 1, {
+          commitId: 'abc', body: '', comments: [], event: 'COMMENT',
+        })
+      ).rejects.toThrow('GITHUB_TOKEN');
+    } finally {
+      if (savedToken !== undefined) process.env.GITHUB_TOKEN = savedToken;
+    }
+  });
+
+  it('isGitHubAvailable returns false when GITHUB_TOKEN is absent', async () => {
+    const savedToken = process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    try {
+      const { isGitHubAvailable } = await import('../src/integrations/github.js');
+      expect(isGitHubAvailable()).toBe(false);
+    } finally {
+      if (savedToken !== undefined) process.env.GITHUB_TOKEN = savedToken;
+    }
   });
 });

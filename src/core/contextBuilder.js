@@ -26,6 +26,13 @@
  *
  *   parseChangedHunks(diff)
  *     → Array<{ file, addedLines: [{ lineNo, text }], contextLines: [{ lineNo, text }] }>
+ *
+ *   buildInDiffLineMap(diff)
+ *     → Map<string, Set<number>>
+ *       Keys are relative file paths; values are sets of 1-based line numbers
+ *       that appear in the diff (both changed and context lines).
+ *       Used to validate whether a finding's line can receive an inline
+ *       GitHub comment (GitHub only accepts comments on in-diff lines).
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -340,4 +347,79 @@ function truncate(str, maxChars, label = 'content') {
   if (!str) return '';
   if (str.length <= maxChars) return str;
   return str.slice(0, maxChars) + `\n[... ${label} truncated at ${maxChars} chars ...]`;
+}
+
+/**
+ * Build a map of every line number that appears inside any diff hunk for each
+ * file, including both changed lines (+/-) AND the surrounding context lines.
+ *
+ * GitHub's pull-request review API only accepts inline comments on lines that
+ * appear somewhere in the diff (either as a changed line or as the context
+ * lines the API echoes around each hunk). Attempting to comment on a line
+ * outside the diff yields a 422 Unprocessable Entity error.
+ *
+ * This function walks the diff with the same state-machine logic as
+ * parseChangedHunks but tracks EVERY new-file line number (changed + context),
+ * not just the added lines. Removed lines (-) have no new-file number, so they
+ * are correctly omitted.
+ *
+ * The result is used by githubReporter.js to decide whether a finding should
+ * receive an inline comment or be kept only in the body summary.
+ *
+ * @param {string} diff  - Unified diff text (the full pr-diff.txt content)
+ * @returns {Map<string, Set<number>>}
+ *   Keys: relative file paths (e.g. "src/api/users.js")
+ *   Values: Set of 1-based new-file line numbers that are in the diff
+ */
+export function buildInDiffLineMap(diff) {
+  if (!diff || !diff.trim()) return new Map();
+
+  /** @type {Map<string, Set<number>>} */
+  const lineMap = new Map();
+  let currentFile   = null;
+  let currentNewLine = 0;
+  let inHunk = false;
+
+  for (const raw of diff.split('\n')) {
+    // ── File header: +++ b/path/to/file.js ───────────────────────────────
+    const headerMatch = raw.match(/^\+\+\+\s+(?:b\/)?(.+?)(?:\s|$)/);
+    if (headerMatch) {
+      const p = headerMatch[1].trim();
+      currentFile   = p !== '/dev/null' ? p.replace(/\\/g, '/') : null;
+      inHunk        = false;
+      currentNewLine = 0;
+      if (currentFile && !lineMap.has(currentFile)) {
+        lineMap.set(currentFile, new Set());
+      }
+      continue;
+    }
+
+    // ── Old-file header: --- a/path — resets hunk state ─────────────────
+    if (raw.startsWith('--- ')) {
+      inHunk = false;
+      continue;
+    }
+
+    // ── Hunk header: @@ -a,b +c,d @@ ────────────────────────────────────
+    const hunkMatch = raw.match(/^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+    if (hunkMatch) {
+      currentNewLine = parseInt(hunkMatch[1], 10);
+      inHunk         = true;
+      continue;
+    }
+
+    if (!currentFile || !inHunk) continue;
+
+    if (raw.startsWith('-') && !raw.startsWith('---')) {
+      // Removed line — no new-file line number, do not advance counter.
+    } else if (raw.startsWith('\\')) {
+      // "\ No newline at end of file" — skip, do not advance.
+    } else {
+      // Added (+) or context line — both have a new-file line number.
+      lineMap.get(currentFile).add(currentNewLine);
+      currentNewLine++;
+    }
+  }
+
+  return lineMap;
 }
