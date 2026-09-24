@@ -3329,3 +3329,108 @@ describe('Test 84 — update-in-place github.js functions', () => {
     }
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 85–86 — Groq createChatCompletion retry-with-backoff
+//
+// Uses an injected mock client + tiny config (base 1ms) so tests are fast and
+// make no real network calls.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { createChatCompletion } from '../src/integrations/groq.js';
+
+// A mock client whose create() throws a scripted sequence of errors, then
+// returns a success value. `err(status)` builds an error with a .status.
+function mockClient(sequence) {
+  let i = 0;
+  return {
+    calls: () => i,
+    chat: {
+      completions: {
+        create: async () => {
+          const step = sequence[i++];
+          if (step instanceof Error) throw step;
+          return step;
+        },
+      },
+    },
+  };
+}
+function httpError(status, headers) {
+  const e = new Error(`HTTP ${status}`);
+  e.status = status;
+  if (headers) e.headers = headers;
+  return e;
+}
+const FAST = { maxRetries: 3, baseMs: 1, capMs: 5 };
+
+describe('Test 85 — createChatCompletion retries transient failures', () => {
+  it('retries a 429 then returns the successful response', async () => {
+    const client = mockClient([httpError(429), httpError(429), { ok: true }]);
+    const res = await createChatCompletion({ model: 'x', messages: [] }, { client, config: FAST });
+    expect(res).toEqual({ ok: true });
+    expect(client.calls()).toBe(3);   // 2 failures + 1 success
+  });
+
+  it('retries transient 5xx (503) then succeeds', async () => {
+    const client = mockClient([httpError(503), { ok: true }]);
+    const res = await createChatCompletion({ model: 'x', messages: [] }, { client, config: FAST });
+    expect(res).toEqual({ ok: true });
+    expect(client.calls()).toBe(2);
+  });
+
+  it('invokes the onRetry callback for each retry', async () => {
+    const client = mockClient([httpError(429), { ok: true }]);
+    const retries = [];
+    await createChatCompletion(
+      { model: 'x', messages: [] },
+      { client, config: FAST, onRetry: (attempt, delay) => retries.push({ attempt, delay }) }
+    );
+    expect(retries).toHaveLength(1);
+    expect(retries[0].attempt).toBe(0);
+    expect(retries[0].delay).toBeGreaterThan(0);
+  });
+
+  it('honours a Retry-After header (seconds) when present', async () => {
+    // Retry-After of 0 seconds → still retries, and does not throw.
+    const client = mockClient([httpError(429, { 'retry-after': '0' }), { ok: true }]);
+    const res = await createChatCompletion({ model: 'x', messages: [] }, { client, config: FAST });
+    expect(res).toEqual({ ok: true });
+  });
+});
+
+describe('Test 86 — createChatCompletion gives up / fails correctly', () => {
+  it('re-throws the original 429 after exhausting retries', async () => {
+    // maxRetries 2 → 3 total attempts, all 429.
+    const client = mockClient([httpError(429), httpError(429), httpError(429)]);
+    await expect(
+      createChatCompletion({ model: 'x', messages: [] }, { client, config: { maxRetries: 2, baseMs: 1, capMs: 5 } })
+    ).rejects.toMatchObject({ status: 429 });
+    expect(client.calls()).toBe(3);
+  });
+
+  it('does NOT retry a non-retryable error (400) — throws immediately', async () => {
+    const client = mockClient([httpError(400), { ok: true }]);
+    await expect(
+      createChatCompletion({ model: 'x', messages: [] }, { client, config: FAST })
+    ).rejects.toMatchObject({ status: 400 });
+    expect(client.calls()).toBe(1);   // no retry attempted
+  });
+
+  it('throws a clear error when no client is available (no GROQ_API_KEY)', async () => {
+    const saved = process.env.GROQ_API_KEY;
+    delete process.env.GROQ_API_KEY;
+    // Reset the cached singleton so getClient() rebuilds (and returns null).
+    const { resetClient } = await import('../src/integrations/groq.js');
+    resetClient();
+    try {
+      await expect(
+        createChatCompletion({ model: 'x', messages: [] }, { config: FAST })
+      ).rejects.toThrow();
+    } finally {
+      if (saved !== undefined) process.env.GROQ_API_KEY = saved;
+      resetClient();
+    }
+  });
+});

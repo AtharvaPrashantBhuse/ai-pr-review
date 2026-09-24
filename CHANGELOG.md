@@ -10,6 +10,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Groq rate-limit resilience (429 retry with backoff)
+
+- The engine runs three agents per review; on a free Groq tier those concurrent
+  calls could trip a 429 rate limit. Previously a 429 made that agent return
+  **zero findings**, so real issues silently vanished from a review.
+- Added `createChatCompletion()` to `src/integrations/groq.js` — a shared
+  wrapper that retries 429 and transient 5xx (500/502/503/504) with exponential
+  backoff, honouring the server's `Retry-After` header when present. All three
+  agents now call it instead of the client directly.
+- After retries are exhausted the original error is re-thrown, so the existing
+  "Groq rate limit reached" message still surfaces only when genuinely stuck.
+- Tunable via `AI_REVIEW_GROQ_MAX_RETRIES` (3), `AI_REVIEW_GROQ_RETRY_BASE_MS`
+  (1000), `AI_REVIEW_GROQ_RETRY_CAP_MS` (15000). Added Tests 85–86.
+
 ### Suggested fixes + update-in-place comments
 
 - **Suggested fixes:** inline comments now include a GitHub ```suggestion```

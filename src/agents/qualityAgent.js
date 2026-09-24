@@ -36,7 +36,7 @@
  *   - LLM temperature kept low for deterministic, factual output.
  */
 
-import { getClient, isGroqAvailable, DEFAULT_MODEL } from '../integrations/groq.js';
+import { getClient, createChatCompletion, isGroqAvailable, DEFAULT_MODEL } from '../integrations/groq.js';
 import { parseFindings }                             from './findingParser.js';
 import {
   CATEGORIES,
@@ -308,7 +308,9 @@ export async function analyseForQuality(diff, repoContext = '', options = {}) {
   const userPrompt   = buildUserPrompt(diff, repoContext);
 
   try {
-    const response = await client.chat.completions.create({
+    // Rate-limit-aware: retries 429 / transient 5xx with backoff so a brief
+    // Groq rate limit does not drop this agent's findings.
+    const response = await createChatCompletion({
       model,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -316,7 +318,7 @@ export async function analyseForQuality(diff, repoContext = '', options = {}) {
       ],
       max_tokens:  4096,
       temperature: 0.1,
-    });
+    }, { client });
 
     const raw = response.choices?.[0]?.message?.content || '';
     // Parse, then keep only enabled types that meet the severity floor.

@@ -120,6 +120,9 @@ Copy `.env.example` to `.env.local` for local development. Do **not** commit
 | `GROQ_API_KEY` | Yes (for LLM analysis) | Groq API key. Read from the environment only — never hardcoded or logged. |
 | `GROQ_SECURITY_MODEL` | No | Override the model for security analysis. Default: `openai/gpt-oss-20b`. |
 | `GROQ_QUALITY_MODEL` | No | Override the model for quality analysis. Falls back to `GROQ_SECURITY_MODEL`. |
+| `AI_REVIEW_GROQ_MAX_RETRIES` | No | Retries per Groq call on 429/transient 5xx before giving up (default 3). |
+| `AI_REVIEW_GROQ_RETRY_BASE_MS` | No | Base backoff between retries, in ms (default 1000). |
+| `AI_REVIEW_GROQ_RETRY_CAP_MS` | No | Maximum single backoff, in ms (default 15000). |
 | `REVIEW_REPO_ROOT` | No | Root of the repository being reviewed. Set by the workflow to the checkout path; defaults to the current working directory locally. |
 | `GITHUB_TOKEN` | Only for `--report-to-pr` | Token used to post the PR comment. Provided automatically by GitHub Actions. |
 | `PR_NUMBER`, `PR_REPO_OWNER`, `PR_REPO_NAME` | Only for `--report-to-pr` | Identify which PR to comment on. |

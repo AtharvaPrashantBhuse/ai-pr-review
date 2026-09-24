@@ -3,8 +3,10 @@
  *
  * Groq API infrastructure layer.
  *
- * Responsibility: construct and return a configured OpenAI-SDK client
- * pointed at the Groq API endpoint. Nothing more.
+ * Responsibility: construct a configured OpenAI-SDK client pointed at the Groq
+ * API endpoint, and expose a rate-limit-aware `createChatCompletion()` wrapper
+ * that retries HTTP 429 / transient 5xx with exponential backoff. Agents call
+ * that wrapper so a brief rate limit does not silently drop their findings.
  *
  * This module is deliberately separate from the Security Agent so that:
  *   - The Security Agent focuses on security logic, not HTTP infrastructure.
@@ -126,4 +128,116 @@ export function resetClient() {
  */
 export function isGroqAvailable() {
   return !!process.env.GROQ_API_KEY;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rate-limit-aware chat completion
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Retry configuration (env-overridable):
+ *   AI_REVIEW_GROQ_MAX_RETRIES     extra attempts after the first (default 3)
+ *   AI_REVIEW_GROQ_RETRY_BASE_MS   base backoff in ms (default 1000)
+ *   AI_REVIEW_GROQ_RETRY_CAP_MS    max single backoff in ms (default 15000)
+ *
+ * The engine runs three agents against Groq per review; on a free tier those
+ * concurrent calls can trip the per-minute rate limit (HTTP 429). Without a
+ * retry each 429 makes that agent return zero findings, so a whole class of
+ * issues silently vanishes from the review. This wrapper retries 429 (and
+ * transient 5xx) with exponential backoff, honouring the server's Retry-After
+ * header when present, so a brief rate limit no longer drops findings.
+ */
+function retryConfig(env = process.env) {
+  const intOr = (name, dflt) => {
+    const v = parseInt(env[name], 10);
+    return Number.isFinite(v) && v >= 0 ? v : dflt;
+  };
+  return {
+    maxRetries: intOr('AI_REVIEW_GROQ_MAX_RETRIES',   3),
+    baseMs:     intOr('AI_REVIEW_GROQ_RETRY_BASE_MS', 1000),
+    capMs:      intOr('AI_REVIEW_GROQ_RETRY_CAP_MS',  15000),
+  };
+}
+
+/** True for errors worth retrying: 429 (rate limit) and transient 5xx. */
+function isRetryable(err) {
+  const status = err?.status;
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+/**
+ * Compute the delay before the next attempt.
+ * Prefers the server's Retry-After header (seconds); otherwise exponential
+ * backoff (base * 2^attempt) with a small jitter, capped at capMs.
+ *
+ * @param {Object} err       - the thrown error (may carry headers)
+ * @param {number} attempt   - 0-based attempt index that just failed
+ * @param {Object} cfg       - retryConfig()
+ * @returns {number} delay in milliseconds
+ */
+function backoffDelayMs(err, attempt, cfg) {
+  // Retry-After may live on err.headers (OpenAI SDK) as seconds.
+  const retryAfterRaw =
+    err?.headers?.['retry-after'] ??
+    err?.headers?.get?.('retry-after') ??
+    null;
+  const retryAfterSec = parseInt(retryAfterRaw, 10);
+  if (Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
+    return Math.min(retryAfterSec * 1000, cfg.capMs);
+  }
+  const exp = cfg.baseMs * Math.pow(2, attempt);
+  const jitter = Math.floor(Math.random() * cfg.baseMs);
+  return Math.min(exp + jitter, cfg.capMs);
+}
+
+function sleep(ms) {
+  return new Promise(res => setTimeout(res, ms));
+}
+
+/**
+ * Create a chat completion with automatic retry on rate-limit / transient
+ * errors. All analysis agents call this instead of hitting the client
+ * directly, so retry behaviour lives in exactly one place.
+ *
+ * On the final exhausted attempt the original error is re-thrown unchanged, so
+ * each agent's existing catch block still surfaces the correct message (e.g.
+ * "Groq rate limit reached").
+ *
+ * @param {Object} params  - OpenAI chat.completions.create params (model, messages, …)
+ * @param {Object} [opts]
+ * @param {Object} [opts.client]  - injectable client (tests); defaults to getClient()
+ * @param {Object} [opts.config]  - injectable retry config (tests); defaults to env
+ * @param {Function} [opts.onRetry] - optional callback(attempt, delayMs, err) for logging/tests
+ * @returns {Promise<Object>} the completion response
+ */
+export async function createChatCompletion(params, opts = {}) {
+  const cfg    = opts.config || retryConfig();
+  const client = opts.client || await getClient();
+  if (!client) {
+    const err = new Error('Groq client unavailable (GROQ_API_KEY missing).');
+    err.status = 401;
+    throw err;
+  }
+
+  let lastErr;
+  for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
+    try {
+      return await client.chat.completions.create(params);
+    } catch (err) {
+      lastErr = err;
+      // Non-retryable, or out of attempts → propagate unchanged.
+      if (!isRetryable(err) || attempt === cfg.maxRetries) throw err;
+
+      const delay = backoffDelayMs(err, attempt, cfg);
+      const reason = err?.status === 429 ? 'rate limit (429)' : `transient ${err?.status}`;
+      console.warn(
+        `[AI-Review] Groq ${reason} — retrying in ${delay}ms ` +
+        `(attempt ${attempt + 1}/${cfg.maxRetries}).`
+      );
+      if (typeof opts.onRetry === 'function') opts.onRetry(attempt, delay, err);
+      await sleep(delay);
+    }
+  }
+  // Unreachable (loop either returns or throws), but keeps the analyser happy.
+  throw lastErr;
 }
