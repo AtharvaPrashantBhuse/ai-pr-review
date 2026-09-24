@@ -101,7 +101,7 @@ CLI entry point: `src/cli/index.js`. Supported inputs:
 | `<file>` | Review one or more file paths directly. |
 | `--diff-file <path>` | Review a unified diff (preferred for PR review). |
 | `--files-from <path>` | Review a newline-separated list of file paths. |
-| `--report-to-pr` | Post the result as a PR comment (requires PR env vars). |
+| `--report-to-pr` | Post results as inline review comments + a summary PR comment (requires PR env vars). |
 
 Local usage does not modify source files and never approves, merges, or blocks
 a Pull Request.

@@ -10,6 +10,29 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Inline PR review comments
+
+- Findings are now posted as **inline review comments** anchored to the relevant
+  diff line, in addition to the existing summary comment.
+- Added `getPR()` and `createPullRequestReview()` to
+  `src/integrations/github.js`. Inline comments are submitted in a single
+  pull-request review using the `COMMENT` event (never approve/request-changes)
+  and target `path` + `line` + `side: "RIGHT"` (no diff-position arithmetic).
+- Added `buildInDiffLineMap(diff)` to `src/core/contextBuilder.js` — maps each
+  file to the set of new-file line numbers present in the diff (changed +
+  context lines), used to determine which findings can receive an inline comment
+  (GitHub rejects comments on out-of-diff lines).
+- `reportToPR()` now accepts an optional `diff` and posts inline comments for
+  **VERIFIED, in-diff** findings, then always posts the summary comment.
+  Inline commenting is best-effort and non-fatal — if it fails, the summary is
+  still posted. Added `buildInlineCommentBody()` for the compact per-line body.
+- `src/cli/index.js` passes the PR diff text through to `reportToPR` on the
+  `--diff-file --report-to-pr` path; the file-based path degrades gracefully
+  (summary only) since no diff is available.
+- No workflow changes required — all needed env vars/data were already present.
+- Added Tests 70–77 covering the in-diff line map, inline comment body, in-diff
+  gating rules, diff-absent fallback, and the new GitHub API functions.
+
 ### Context-size fix (bounded prompts)
 
 - Replaced sending whole source files to the LLM with a **bounded Context

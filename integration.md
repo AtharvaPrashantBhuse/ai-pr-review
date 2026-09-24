@@ -29,7 +29,7 @@ Your repository
          3. Build bounded LLM context  ←  context-size fix
          4. Security Agent + Quality Agent → Groq/LLM → findings
          5. Evidence Validator → VERIFIED / UNVERIFIED
-         6. GitHub Reporter → PR comment on YOUR repository
+         6. GitHub Reporter → inline review comments + summary comment on YOUR repository
 ```
 
 The engine checks out your code and posts the comment back to your PR. Nothing else in your repository changes.
@@ -352,9 +352,24 @@ Genesis context is bounded to `AI_REVIEW_MAX_GENESIS_CONTEXT_CHARS` (default 4 0
 
 ---
 
-## PR comment format
+## Review comment format
 
-Example comment when findings are detected (one security, one quality):
+Findings are reported in two complementary places:
+
+1. **Inline review comments** — each finding is anchored directly to its line in
+   the PR diff (a GitHub pull-request review, `COMMENT` event — never approve or
+   request-changes). Only **VERIFIED** findings whose line is inside the diff
+   (a changed or context line) get an inline comment; GitHub rejects comments on
+   lines outside the diff. Each inline comment shows the category, severity,
+   evidence, explanation, and a cross-reference to the summary.
+2. **Summary comment** — the full-detail comment below, listing every finding
+   (including any that could not be placed inline). Always posted.
+
+If inline commenting fails for any reason (e.g. the diff isn't available, an API
+error, or a missing commit SHA), it is non-fatal: the summary comment is still
+posted so no findings are lost.
+
+Example summary comment when findings are detected (one security, one quality):
 
 ```
 ## 🤖 AI Code Review

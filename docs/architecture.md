@@ -36,7 +36,7 @@ Evidence Validator  (src/validation/evidenceValidator.js)
 GitHub Reporter  (src/reporting/githubReporter.js)
       │
       ▼
-PR comment on the caller repository
+Inline review comments (per finding) + summary comment on the caller repository
 ```
 
 ### Component purposes
@@ -56,8 +56,8 @@ PR comment on the caller repository
 | **Groq integration** | `src/integrations/groq.js` | Builds the OpenAI-SDK client pointed at the Groq endpoint. Reads `GROQ_API_KEY` from the environment; keeps TLS verification enabled; supports a corporate proxy. |
 | **Finding Dedup** | `src/core/findingDedup.js` | Deterministically merges overlapping findings on the same file+line span into one primary (security always wins), recording the other types as `alsoFlaggedAs`. Reduces reviewer noise. Never uses an LLM. |
 | **Evidence Validator** | `src/validation/evidenceValidator.js` | Deterministically verifies each finding against the checked-out source. Never uses an LLM. Marks findings VERIFIED or UNVERIFIED. |
-| **GitHub integration** | `src/integrations/github.js` | Low-level GitHub REST calls (post PR comment, list PR files). |
-| **GitHub Reporter** | `src/reporting/githubReporter.js` | Formats a ReviewResult into a Markdown comment and posts it to the caller's PR. Never approves, merges, blocks, or edits the PR. |
+| **GitHub integration** | `src/integrations/github.js` | Low-level GitHub REST calls: post PR comment, list PR files, get PR (commit SHA), create pull-request review with inline comments. |
+| **GitHub Reporter** | `src/reporting/githubReporter.js` | Formats a ReviewResult into (1) inline review comments anchored to each finding's diff line and (2) a summary Markdown comment, and posts both to the caller's PR. Inline comments target only VERIFIED, in-diff findings via a `COMMENT`-event review. Never approves, merges, blocks, or edits the PR. |
 | **Genesis Adapter** | `src/genesis/genesisAdapter.js` | *Optional.* Provides repository intelligence (symbols, imports, blast radius) when a `.genesis/index` and the Genesis query tool are present. Not a vulnerability detector. |
 | **CLI** | `src/cli/index.js` | Entry point for local runs and for the GitHub Actions step. |
 
@@ -119,7 +119,7 @@ small caller workflow rather than copying the engine. See
   (code-quality catalog).
 - **Bounded context** builder to keep prompts within model limits.
 - **Deterministic Evidence Validator**.
-- **GitHub Reporter** posts an informational PR comment.
+- **GitHub Reporter** posts informational inline review comments (per finding) plus a summary PR comment.
 - Genesis integration present in code but **inactive** without a `.genesis/index`.
 
 ### Future / proposed (NOT implemented)
