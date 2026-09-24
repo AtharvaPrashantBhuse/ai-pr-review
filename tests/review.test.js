@@ -51,7 +51,8 @@ function readFixture(name) {
 import { parseFindings }             from '../src/agents/securityAgent.js';
 import { validateFinding,
          validateFindings }          from '../src/validation/evidenceValidator.js';
-import { buildCommentBody, buildInlineCommentBody } from '../src/reporting/githubReporter.js';
+import { buildCommentBody, buildInlineCommentBody,
+         SUMMARY_MARKER, INLINE_MARKER } from '../src/reporting/githubReporter.js';
 import { classifyFiles }             from '../src/core/reviewEngine.js';
 import { makeReviewResult,
          makeErrorResult,
@@ -3134,6 +3135,197 @@ describe('Test 77 — github.js new API functions are exported and callable', ()
       expect(isGitHubAvailable()).toBe(false);
     } finally {
       if (savedToken !== undefined) process.env.GITHUB_TOKEN = savedToken;
+    }
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests 78–84 — Suggested fixes + update-in-place markers
+//
+//   78 — parseFindings carries suggestedFix
+//   79 — inline comment renders a ```suggestion``` block for single-line + fix
+//   80 — inline comment omits suggestion for range findings / no fix
+//   81 — inline comment body contains the INLINE_MARKER
+//   82 — summary body contains the SUMMARY_MARKER
+//   83 — markers are stable, unique strings (used to find prior comments)
+//   84 — new update-in-place github.js functions are exported + token-guarded
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Test 78 — parseFindings: suggestedFix ────────────────────────────────────
+
+describe('Test 78 — parseFindings carries suggestedFix', () => {
+  it('keeps a non-empty suggestedFix', () => {
+    const [f] = parseFindings(JSON.stringify([{
+      type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+      file: 'a.js', line: 5, evidence: 'if (x = 1) {', explanation: 'y',
+      suggestedFix: 'if (x === 1) {',
+    }]));
+    expect(f.suggestedFix).toBe('if (x === 1) {');
+  });
+
+  it('normalises absent suggestedFix to null', () => {
+    const [f] = parseFindings(JSON.stringify([{
+      type: 'DEAD_CODE', severity: 'LOW', confidence: 'HIGH',
+      file: 'a.js', line: 9, evidence: 'z', explanation: 'w',
+    }]));
+    expect(f.suggestedFix).toBeNull();
+  });
+
+  it('normalises blank/whitespace suggestedFix to null', () => {
+    const [f] = parseFindings(JSON.stringify([{
+      type: 'DEAD_CODE', severity: 'LOW', confidence: 'HIGH',
+      file: 'a.js', line: 9, evidence: 'z', explanation: 'w',
+      suggestedFix: '   ',
+    }]));
+    expect(f.suggestedFix).toBeNull();
+  });
+});
+
+// ─── Test 79 — inline suggestion block: single-line + fix ─────────────────────
+
+describe('Test 79 — inline comment renders a suggestion block', () => {
+  const finding = {
+    type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+    file: 'a.js', line: 27, evidence: 'if (age = 18) {',
+    explanation: 'Assignment used where comparison intended.',
+    suggestedFix: 'if (age === 18) {',
+    verification: { status: 'VERIFIED', file: 'a.js', line: 27, sourceLine: 'x' },
+  };
+
+  it('includes a ```suggestion fenced block', () => {
+    const body = buildInlineCommentBody(finding, 1);
+    expect(body).toContain('```suggestion');
+  });
+
+  it('the suggestion block contains the corrected line', () => {
+    const body = buildInlineCommentBody(finding, 1);
+    expect(body).toContain('if (age === 18) {');
+  });
+
+  it('labels the suggestion for the reader', () => {
+    const body = buildInlineCommentBody(finding, 1);
+    expect(body).toContain('Suggested fix');
+  });
+});
+
+// ─── Test 80 — inline suggestion block: omitted when not applicable ───────────
+
+describe('Test 80 — inline comment omits suggestion when not applicable', () => {
+  it('omits the block for a range finding even if a fix is present', () => {
+    const finding = {
+      type: 'DUPLICATE_CODE', severity: 'MEDIUM', confidence: 'HIGH',
+      file: 'a.js', line: 10, endLine: 20,
+      evidence: 'function foo() {', explanation: 'dup',
+      suggestedFix: 'function foo() {}',
+      verification: { status: 'VERIFIED', file: 'a.js', line: 10, sourceLine: 'x' },
+    };
+    expect(buildInlineCommentBody(finding, 1)).not.toContain('```suggestion');
+  });
+
+  it('omits the block when no suggestedFix is present', () => {
+    const finding = {
+      type: 'LOGIC_ERROR', severity: 'HIGH', confidence: 'HIGH',
+      file: 'a.js', line: 27, evidence: 'if (age = 18) {', explanation: 'x',
+      verification: { status: 'VERIFIED', file: 'a.js', line: 27, sourceLine: 'x' },
+    };
+    expect(buildInlineCommentBody(finding, 1)).not.toContain('```suggestion');
+  });
+
+  it('treats endLine === line as single-line (suggestion allowed)', () => {
+    const finding = {
+      type: 'MAGIC_NUMBER', severity: 'LOW', confidence: 'MEDIUM',
+      file: 'a.js', line: 5, endLine: 5,
+      evidence: 'return 86400000;', explanation: 'magic number',
+      suggestedFix: 'return MS_PER_DAY;',
+      verification: { status: 'VERIFIED', file: 'a.js', line: 5, sourceLine: 'x' },
+    };
+    expect(buildInlineCommentBody(finding, 1)).toContain('```suggestion');
+  });
+});
+
+// ─── Test 81 — inline comment carries the INLINE_MARKER ───────────────────────
+
+describe('Test 81 — inline comment body contains the INLINE_MARKER', () => {
+  it('every inline comment starts with the hidden inline marker', () => {
+    const finding = {
+      type: 'BUG_RISK', severity: 'MEDIUM', confidence: 'HIGH',
+      file: 'a.js', line: 3, evidence: 'user.name', explanation: 'x',
+      verification: { status: 'VERIFIED', file: 'a.js', line: 3, sourceLine: 'x' },
+    };
+    const body = buildInlineCommentBody(finding, 1);
+    expect(body).toContain(INLINE_MARKER);
+  });
+});
+
+// ─── Test 82 — summary body carries the SUMMARY_MARKER ────────────────────────
+
+describe('Test 82 — summary body contains the SUMMARY_MARKER', () => {
+  it('marker is present when there are findings', () => {
+    const result = makeReviewResult({
+      findings: [{
+        type: 'SQL_INJECTION', severity: 'HIGH', confidence: 'HIGH',
+        file: 'a.js', line: 1, evidence: 'x', explanation: 'y',
+        verification: { status: 'VERIFIED', file: 'a.js', line: 1, sourceLine: 'x' },
+      }],
+      genesisAvailable: false, llmUsed: true, error: null, durationMs: 100,
+    });
+    expect(buildCommentBody(result)).toContain(SUMMARY_MARKER);
+  });
+
+  it('marker is present in the no-findings comment too', () => {
+    const result = makeReviewResult({
+      findings: [], genesisAvailable: false, llmUsed: true, error: null, durationMs: 100,
+    });
+    expect(buildCommentBody(result)).toContain(SUMMARY_MARKER);
+  });
+});
+
+// ─── Test 83 — markers are stable + distinct ──────────────────────────────────
+
+describe('Test 83 — markers are stable, distinct HTML comments', () => {
+  it('both markers are HTML comments (invisible in rendered Markdown)', () => {
+    expect(SUMMARY_MARKER.startsWith('<!--')).toBe(true);
+    expect(SUMMARY_MARKER.trim().endsWith('-->')).toBe(true);
+    expect(INLINE_MARKER.startsWith('<!--')).toBe(true);
+    expect(INLINE_MARKER.trim().endsWith('-->')).toBe(true);
+  });
+
+  it('summary and inline markers are different', () => {
+    expect(SUMMARY_MARKER).not.toBe(INLINE_MARKER);
+  });
+});
+
+// ─── Test 84 — update-in-place github.js functions ───────────────────────────
+
+describe('Test 84 — update-in-place github.js functions', () => {
+  it('all new functions are exported', async () => {
+    const gh = await import('../src/integrations/github.js');
+    expect(typeof gh.listIssueComments).toBe('function');
+    expect(typeof gh.updateIssueComment).toBe('function');
+    expect(typeof gh.listReviewComments).toBe('function');
+    expect(typeof gh.deleteReviewComment).toBe('function');
+  });
+
+  it('updateIssueComment throws without GITHUB_TOKEN', async () => {
+    const saved = process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    try {
+      const { updateIssueComment } = await import('../src/integrations/github.js');
+      await expect(updateIssueComment('o', 'r', 123, 'body')).rejects.toThrow('GITHUB_TOKEN');
+    } finally {
+      if (saved !== undefined) process.env.GITHUB_TOKEN = saved;
+    }
+  });
+
+  it('deleteReviewComment throws without GITHUB_TOKEN', async () => {
+    const saved = process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    try {
+      const { deleteReviewComment } = await import('../src/integrations/github.js');
+      await expect(deleteReviewComment('o', 'r', 123)).rejects.toThrow('GITHUB_TOKEN');
+    } finally {
+      if (saved !== undefined) process.env.GITHUB_TOKEN = saved;
     }
   });
 });

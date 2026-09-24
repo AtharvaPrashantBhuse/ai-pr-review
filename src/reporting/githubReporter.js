@@ -46,6 +46,10 @@ import {
   postPRComment,
   getPR,
   createPullRequestReview,
+  listIssueComments,
+  updateIssueComment,
+  listReviewComments,
+  deleteReviewComment,
   isGitHubAvailable,
 } from '../integrations/github.js';
 import { categoryMetaForType }              from '../agents/checkCatalog.js';
@@ -69,6 +73,15 @@ const SEV_ICON = {
   MEDIUM:   '🟡',
   LOW:      '🔵',
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hidden markers — invisible in rendered Markdown, used for update-in-place.
+// GitHub renders HTML comments as nothing, so these never appear to the reader
+// but let the tool recognise its own prior comments on a re-run.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const SUMMARY_MARKER = '<!-- ai-pr-review:summary -->';
+export const INLINE_MARKER  = '<!-- ai-pr-review:inline -->';
 
 /**
  * Display category ("<icon> <label>") for a finding type.
@@ -110,6 +123,13 @@ function categoryOf(type) {
  *   2. Body summary comment — the existing full-detail summary that lists
  *      every finding regardless of in-diff status. Always posted.
  *
+ * Update-in-place (no duplicate stacking on re-runs):
+ *   - The summary comment carries a hidden marker; on a re-run the prior
+ *     summary is found and UPDATED in place instead of posting a new one.
+ *   - Inline comments also carry a hidden marker; the tool's prior inline
+ *     comments are deleted before the fresh review is posted, so lines are not
+ *     annotated multiple times across pushes.
+ *
  * Inline comment creation is non-fatal: if it fails (e.g. no PR diff available,
  * GitHub API error, missing commit SHA) the failure is logged and the body
  * summary is still posted so the reviewer never loses findings.
@@ -143,15 +163,33 @@ export async function reportToPR({ owner, repo, prNumber, results, diff }) {
     );
   }
 
-  // ── 1. Body summary comment (always posted) ───────────────────────────────
+  // ── 1. Body summary comment (update-in-place, always posted) ──────────────
+  // Find a prior summary comment from this tool (by its hidden marker) and
+  // edit it in place; otherwise post a fresh one. This keeps an active PR to a
+  // single, always-current summary instead of one comment per push.
   const bodyText = buildCommentBody(results);
   let summaryComment = null;
 
   try {
-    summaryComment = await postPRComment(owner, repo, prNumber, bodyText);
-    console.log(`[GitHubReporter] Posted summary comment on ${owner}/${repo}#${prNumber}`);
+    let priorId = null;
+    try {
+      const existing = await listIssueComments(owner, repo, prNumber);
+      const mine = existing.find(c => typeof c.body === 'string' && c.body.includes(SUMMARY_MARKER));
+      priorId = mine?.id ?? null;
+    } catch (err) {
+      // Listing failed — fall back to posting a new comment.
+      console.warn(`[GitHubReporter] Could not list prior comments: ${err.message}`);
+    }
+
+    if (priorId) {
+      summaryComment = await updateIssueComment(owner, repo, priorId, bodyText);
+      console.log(`[GitHubReporter] Updated summary comment #${priorId} on ${owner}/${repo}#${prNumber}`);
+    } else {
+      summaryComment = await postPRComment(owner, repo, prNumber, bodyText);
+      console.log(`[GitHubReporter] Posted summary comment on ${owner}/${repo}#${prNumber}`);
+    }
   } catch (err) {
-    console.error(`[GitHubReporter] Failed to post summary comment: ${err.message}`);
+    console.error(`[GitHubReporter] Failed to post/update summary comment: ${err.message}`);
     throw err;   // summary is the primary output — propagate this failure
   }
 
@@ -195,8 +233,29 @@ export async function reportToPR({ owner, repo, prNumber, results, diff }) {
       return { summaryComment, review };
     }
 
+    // Remove this tool's inline comments from a prior run so a re-review does
+    // not stack duplicate line comments. Comments are identified by the hidden
+    // INLINE_MARKER. Deletion is best-effort — a failure to delete one comment
+    // must not prevent posting the fresh review.
+    try {
+      const prior = await listReviewComments(owner, repo, prNumber);
+      const mine  = prior.filter(c => typeof c.body === 'string' && c.body.includes(INLINE_MARKER));
+      for (const c of mine) {
+        try {
+          await deleteReviewComment(owner, repo, c.id);
+        } catch (delErr) {
+          console.warn(`[GitHubReporter] Could not delete prior inline comment #${c.id}: ${delErr.message}`);
+        }
+      }
+      if (mine.length > 0) {
+        console.log(`[GitHubReporter] Removed ${mine.length} stale inline comment(s) before re-review.`);
+      }
+    } catch (listErr) {
+      console.warn(`[GitHubReporter] Could not list prior inline comments: ${listErr.message}`);
+    }
+
     // Build the inline comments array.
-    const comments = inlineable.map((f, idx) => ({
+    const comments = inlineable.map((f) => ({
       path: f.file,
       line: f.line,
       side: 'RIGHT',
@@ -249,6 +308,9 @@ export function buildCommentBody(results) {
   const lines = [];
 
   // ── Header ────────────────────────────────────────────────────────────────
+  // Hidden marker (first line) lets a re-run find and update this exact comment
+  // instead of posting a new one.
+  lines.push(SUMMARY_MARKER);
   lines.push('## 🤖 AI Code Review');
   lines.push('');
   lines.push('> **Powered by:** Genesis · Security Agent · Quality Agent · Testing Agent · Groq/LLM · Evidence Validator');
@@ -381,6 +443,11 @@ export function buildCommentBody(results) {
  * A cross-reference to the finding number in the summary helps them navigate
  * to the full detail if they want it.
  *
+ * When a single-line finding carries a `suggestedFix`, a GitHub
+ * ```suggestion``` block is included so the developer can apply the corrected
+ * line with one click. Range findings never get a suggestion block (GitHub
+ * suggestions map to exactly the commented line).
+ *
  * @param {Object} finding   - Post-validation finding (has .verification etc.)
  * @param {number} findingNo - 1-based index in the full findings list (for cross-ref)
  * @returns {string} Markdown string suitable for a GitHub review comment body
@@ -394,6 +461,10 @@ export function buildInlineCommentBody(finding, findingNo) {
     : `line ${finding.line}`;
 
   const lines = [];
+
+  // Hidden marker lets a re-run identify and remove this tool's prior inline
+  // comments before posting a fresh review (avoids stacking duplicates).
+  lines.push(INLINE_MARKER);
 
   // Compact header — category + type + severity on one line
   lines.push(
@@ -410,6 +481,23 @@ export function buildInlineCommentBody(finding, findingNo) {
   // Explanation (the most important part for the developer)
   lines.push(finding.explanation || '(no explanation)');
   lines.push('');
+
+  // Suggested fix — a GitHub ```suggestion``` block renders a one-click
+  // "Commit suggestion" button. GitHub applies a suggestion to exactly the
+  // commented line, so we only emit it for SINGLE-LINE findings that carry a
+  // concrete suggestedFix. Range findings (endLine > line) can't map a one-line
+  // suggestion to a multi-line span, so they never get a suggestion block.
+  const isSingleLine = !(finding.endLine && finding.endLine > finding.line);
+  if (isSingleLine && typeof finding.suggestedFix === 'string' && finding.suggestedFix.trim()) {
+    lines.push('**Suggested fix**');
+    lines.push('');
+    lines.push('```suggestion');
+    // The suggestion body replaces the flagged line verbatim. Emit it exactly
+    // as provided (already trimmed of trailing whitespace by the parser).
+    lines.push(finding.suggestedFix);
+    lines.push('```');
+    lines.push('');
+  }
 
   // Additional merged types, if any
   if (Array.isArray(finding.alsoFlaggedAs) && finding.alsoFlaggedAs.length > 0) {

@@ -361,9 +361,17 @@ Findings are reported in two complementary places:
    request-changes). Only **VERIFIED** findings whose line is inside the diff
    (a changed or context line) get an inline comment; GitHub rejects comments on
    lines outside the diff. Each inline comment shows the category, severity,
-   evidence, explanation, and a cross-reference to the summary.
+   evidence, explanation, and a cross-reference to the summary. When the agent
+   proposes a concrete one-line fix, a GitHub ```suggestion``` block is included
+   so you can apply it with a one-click **Commit suggestion** button (single-line
+   findings only — range findings never get a suggestion).
 2. **Summary comment** — the full-detail comment below, listing every finding
    (including any that could not be placed inline). Always posted.
+
+**Update-in-place:** re-running the review on the same PR (e.g. after a new push)
+does not stack duplicate comments. The summary comment is found by a hidden
+marker and edited in place, and the tool's prior inline comments are removed
+before the fresh review is posted.
 
 If inline commenting fails for any reason (e.g. the diff isn't available, an API
 error, or a missing commit SHA), it is non-fatal: the summary comment is still

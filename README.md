@@ -4,7 +4,9 @@
 
 A reusable, repository-independent engine that reviews the changed code in a
 Pull Request and posts its findings back as both **inline code comments** on the
-relevant diff lines and a **summary PR comment**. It runs three analysis
+relevant diff lines (with one-click **suggested fixes** where possible) and a
+**summary PR comment**. Re-runs **update the existing comments in place** rather
+than stacking duplicates. It runs three analysis
 agents over the diff and verifies every finding against the actual source before
 reporting it:
 
@@ -64,7 +66,7 @@ Security Agent + Quality Agent  → Groq / LLM  → structured findings
 Evidence Validator   → VERIFIED / UNVERIFIED (deterministic, no LLM)
       │
       ▼
-GitHub Reporter      → inline review comments + summary comment on the caller repository
+GitHub Reporter      → inline comments (+ suggested fixes) & summary, updated in place on the caller repository
 ```
 
 The engine can also run locally against a file or a diff via the CLI (below).

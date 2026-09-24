@@ -16,6 +16,9 @@
  *   - Carry an optional `endLine` for range (multi-line) findings such as
  *     duplicated blocks or over-long functions. `endLine` is null for
  *     single-line findings and is never less than `line`.
+ *   - Carry an optional `suggestedFix` — a corrected single line the LLM
+ *     proposes for the flagged line. Used to render a one-click GitHub
+ *     `suggestion` block on inline comments. Null when absent/blank.
  *
  * This module is deliberately type-agnostic: it does not decide WHICH finding
  * types are valid. Each agent filters the parsed findings down to the types it
@@ -67,6 +70,12 @@ export function parseFindings(raw) {
       let endLine = parseInt(f.endLine, 10);
       endLine = Number.isFinite(endLine) && endLine >= line ? endLine : null;
 
+      // suggestedFix is optional — a corrected single line proposed by the LLM.
+      // Blank/absent normalises to null. Trailing newlines are trimmed so the
+      // reporter controls formatting inside the GitHub suggestion block.
+      const rawFix = typeof f.suggestedFix === 'string' ? f.suggestedFix.replace(/\s+$/, '') : '';
+      const suggestedFix = rawFix.trim() ? rawFix : null;
+
       return {
         type:        String(f.type        || 'UNKNOWN').toUpperCase(),
         severity:    VALID_SEVERITY.has(String(f.severity   || '').toUpperCase())
@@ -78,6 +87,7 @@ export function parseFindings(raw) {
         endLine,
         evidence:    String(f.evidence    || ''),
         explanation: String(f.explanation || ''),
+        suggestedFix,
       };
     })
     .filter(f => f.type && f.file);

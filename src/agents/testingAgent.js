@@ -194,7 +194,8 @@ Each finding must follow this exact schema:
   "line":        <integer — 1-based start line in the file after the change>,
   "endLine":     <integer — OPTIONAL; end line for a multi-line/range finding; omit for single-line>,
   "evidence":    "<the exact offending line of code (for a range, a representative line within it)>",
-  "explanation": "<concise explanation of the test problem and its risk>"
+  "explanation": "<concise explanation of the test problem and its risk>",
+  "suggestedFix": "<OPTIONAL — the corrected version of the SINGLE flagged line, ready to replace it verbatim; omit for multi-line/range findings or when no clear one-line fix exists>"
 }
 
 Rules:
@@ -203,6 +204,9 @@ Rules:
   test-logic block, multiple-concerns block) include "endLine" describing the span.
 - "evidence" must be a verbatim or near-verbatim copy of a real line in the reported range.
 - Do NOT fabricate evidence — only report what is explicitly present in the supplied code.
+- "suggestedFix", when provided, must be a drop-in replacement for the single flagged
+  line (same indentation) that corrects the test problem. Omit it for range findings,
+  for coverage gaps (which need a whole new test, not a line edit), or when unsure.
 - Prefer precision over recall: only report issues you are reasonably confident about.
 - Coverage findings are inferences (you cannot run the suite) — only flag clear gaps.
 - Do not report the same issue more than once.`;

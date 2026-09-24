@@ -10,6 +10,25 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Suggested fixes + update-in-place comments
+
+- **Suggested fixes:** inline comments now include a GitHub ```suggestion```
+  block with a one-click "Commit suggestion" button when the agent proposes a
+  concrete one-line fix. Added an optional `suggestedFix` field to the finding
+  schema in all three agent prompts and carried it through `findingParser`.
+  Suggestion blocks are emitted only for **single-line** findings that carry a
+  `suggestedFix`; range findings never get one (a suggestion maps to exactly the
+  commented line).
+- **Update-in-place (no duplicate stacking):** re-running the review on a PR no
+  longer stacks new comments. The summary comment carries a hidden marker
+  (`SUMMARY_MARKER`) and is found and **edited in place**; prior inline comments
+  (hidden `INLINE_MARKER`) are **deleted before** the fresh review is posted.
+  Added `listIssueComments`, `updateIssueComment`, `listReviewComments`, and
+  `deleteReviewComment` to `src/integrations/github.js`. All marker lookup /
+  cleanup is best-effort and non-fatal — a failure falls back to posting anew.
+- Added Tests 78–84 covering suggestedFix parsing, suggestion-block gating, the
+  hidden markers, and the new GitHub API functions.
+
 ### Inline PR review comments
 
 - Findings are now posted as **inline review comments** anchored to the relevant

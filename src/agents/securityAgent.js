@@ -230,7 +230,8 @@ Each finding must follow this exact schema:
   "line":        <integer — 1-based start line in the file after the change>,
   "endLine":     <integer — OPTIONAL; end line for a multi-line/range finding; omit for single-line>,
   "evidence":    "<the exact vulnerable line of code (for a range, a representative line within it)>",
-  "explanation": "<concise explanation of the vulnerability and the concrete risk>"
+  "explanation": "<concise explanation of the vulnerability and the concrete risk>",
+  "suggestedFix": "<OPTIONAL — the corrected version of the SINGLE flagged line, ready to replace it verbatim; omit for multi-line/range findings or when no safe one-line fix exists>"
 }
 
 Rules:
@@ -240,6 +241,10 @@ Rules:
   control handler) include "endLine" describing the span.
 - "evidence" must be a verbatim or near-verbatim copy of a real line in the reported range.
 - Do NOT fabricate evidence — only report what is explicitly present in the supplied code.
+- "suggestedFix", when provided, must be a drop-in replacement for the single flagged
+  line (same indentation), be genuinely safer, and preserve intent. Omit it entirely
+  for range findings or when you are not confident a correct one-line fix exists —
+  never guess a fix.
 - Prefer precision over recall: only report issues you are reasonably confident about.
 - Do not report the same issue more than once.`;
 }

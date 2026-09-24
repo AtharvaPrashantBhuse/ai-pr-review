@@ -203,6 +203,92 @@ export async function createPullRequestReview(
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Update-in-place support
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * List issue-level comments on a PR (the conversation-timeline comments — the
+ * same kind postPRComment creates). Paginates up to 300.
+ *
+ * Used to locate a prior summary comment posted by this tool (identified by a
+ * hidden marker in its body) so it can be updated in place instead of stacking
+ * a new comment on every run.
+ *
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} prNumber
+ * @returns {Promise<Array>} Array of comment objects ({ id, body, user, ... })
+ */
+export async function listIssueComments(owner, repo, prNumber) {
+  const all = [];
+  for (let page = 1; page <= 3; page++) {
+    const comments = await githubFetch(
+      `/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`
+    );
+    if (!Array.isArray(comments) || comments.length === 0) break;
+    all.push(...comments);
+    if (comments.length < 100) break;
+  }
+  return all;
+}
+
+/**
+ * Update (edit) an existing issue-level comment in place.
+ *
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} commentId - The comment id (from listIssueComments)
+ * @param {string} body      - New Markdown body
+ * @returns {Promise<Object>} Updated comment object
+ */
+export async function updateIssueComment(owner, repo, commentId, body) {
+  return githubFetch(`/repos/${owner}/${repo}/issues/comments/${commentId}`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ body }),
+  });
+}
+
+/**
+ * List inline review comments on a PR (line-anchored comments created by a
+ * pull-request review). Paginates up to 300.
+ *
+ * Used to find prior inline comments posted by this tool so they can be
+ * removed before a fresh review is posted — otherwise every run stacks another
+ * set of inline comments on the same lines.
+ *
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} prNumber
+ * @returns {Promise<Array>} Array of review-comment objects ({ id, body, ... })
+ */
+export async function listReviewComments(owner, repo, prNumber) {
+  const all = [];
+  for (let page = 1; page <= 3; page++) {
+    const comments = await githubFetch(
+      `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100&page=${page}`
+    );
+    if (!Array.isArray(comments) || comments.length === 0) break;
+    all.push(...comments);
+    if (comments.length < 100) break;
+  }
+  return all;
+}
+
+/**
+ * Delete a single inline review comment by id.
+ *
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} commentId - The review-comment id (from listReviewComments)
+ * @returns {Promise<null>}
+ */
+export async function deleteReviewComment(owner, repo, commentId) {
+  return githubFetch(`/repos/${owner}/${repo}/pulls/comments/${commentId}`, {
+    method: 'DELETE',
+  });
+}
+
 /**
  * Check whether GitHub integration is available (token present).
  * Does not make a network request.

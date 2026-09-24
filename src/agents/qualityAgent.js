@@ -214,7 +214,8 @@ Each finding must follow this exact schema:
   "line":        <integer — 1-based start line in the file after the change>,
   "endLine":     <integer — OPTIONAL; 1-based end line for a multi-line/range finding; omit for single-line>,
   "evidence":    "<the exact offending line of code (for a range, a representative line within it)>",
-  "explanation": "<concise explanation of the issue and the concrete risk or cost>"
+  "explanation": "<concise explanation of the issue and the concrete risk or cost>",
+  "suggestedFix": "<OPTIONAL — the corrected version of the SINGLE flagged line, ready to replace it verbatim; omit for multi-line/range findings or when no clear one-line fix exists>"
 }
 
 Rules:
@@ -223,6 +224,9 @@ Rules:
   structural maintainability) include "endLine" describing the full span.
 - "evidence" must be a verbatim or near-verbatim copy of a real line in the reported range.
 - Do NOT fabricate evidence — only report what is explicitly present in the supplied code.
+- "suggestedFix", when provided, must be a drop-in replacement for the single flagged
+  line (same indentation), correct, and preserve intent. Omit it for range findings or
+  when no clear one-line fix exists — never guess.
 - Only report issues you are reasonably confident about; prefer precision over recall.
 - Do not report the same issue more than once.`;
 }

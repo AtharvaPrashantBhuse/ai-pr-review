@@ -36,7 +36,7 @@ Evidence Validator  (src/validation/evidenceValidator.js)
 GitHub Reporter  (src/reporting/githubReporter.js)
       │
       ▼
-Inline review comments (per finding) + summary comment on the caller repository
+Inline comments (+ suggested fixes) + summary, updated in place on the caller repository
 ```
 
 ### Component purposes
@@ -57,7 +57,7 @@ Inline review comments (per finding) + summary comment on the caller repository
 | **Finding Dedup** | `src/core/findingDedup.js` | Deterministically merges overlapping findings on the same file+line span into one primary (security always wins), recording the other types as `alsoFlaggedAs`. Reduces reviewer noise. Never uses an LLM. |
 | **Evidence Validator** | `src/validation/evidenceValidator.js` | Deterministically verifies each finding against the checked-out source. Never uses an LLM. Marks findings VERIFIED or UNVERIFIED. |
 | **GitHub integration** | `src/integrations/github.js` | Low-level GitHub REST calls: post PR comment, list PR files, get PR (commit SHA), create pull-request review with inline comments. |
-| **GitHub Reporter** | `src/reporting/githubReporter.js` | Formats a ReviewResult into (1) inline review comments anchored to each finding's diff line and (2) a summary Markdown comment, and posts both to the caller's PR. Inline comments target only VERIFIED, in-diff findings via a `COMMENT`-event review. Never approves, merges, blocks, or edits the PR. |
+| **GitHub Reporter** | `src/reporting/githubReporter.js` | Formats a ReviewResult into (1) inline review comments anchored to each finding's diff line — including a one-click ```suggestion``` block when the agent proposes a single-line fix — and (2) a summary Markdown comment, posting both to the caller's PR. Inline comments target only VERIFIED, in-diff findings via a `COMMENT`-event review. Uses hidden markers to **update comments in place** on re-runs (summary edited; prior inline comments deleted first) instead of stacking. Never approves, merges, blocks, or edits PR source. |
 | **Genesis Adapter** | `src/genesis/genesisAdapter.js` | *Optional.* Provides repository intelligence (symbols, imports, blast radius) when a `.genesis/index` and the Genesis query tool are present. Not a vulnerability detector. |
 | **CLI** | `src/cli/index.js` | Entry point for local runs and for the GitHub Actions step. |
 
