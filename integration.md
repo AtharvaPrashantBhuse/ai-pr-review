@@ -21,7 +21,7 @@ Your repository
    PR opened / updated
       |
       v  .github/workflows/ai-security-review.yml  (in YOUR repo)
-         uses: AtharvaPrashantBhuse/ai-pr-review/.github/workflows/reusable-review.yml@main
+         uses: AdityaBirlaCapitalDigital/ai-pr-review/.github/workflows/reusable-review.yml@main
       |
       v  reusable-review.yml  (runs inside ai-pr-review)
          1. Checkout your repository at the PR branch
@@ -80,7 +80,7 @@ permissions:
 
 jobs:
   ai-review:
-    uses: AtharvaPrashantBhuse/ai-pr-review/.github/workflows/reusable-review.yml@main
+    uses: AdityaBirlaCapitalDigital/ai-pr-review/.github/workflows/reusable-review.yml@main
     secrets:
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 ```
@@ -249,7 +249,7 @@ Every repository that wants AI security review adds the same two-line caller wor
 ```yaml
 jobs:
   ai-review:
-    uses: AtharvaPrashantBhuse/ai-pr-review/.github/workflows/reusable-review.yml@main
+    uses: AdityaBirlaCapitalDigital/ai-pr-review/.github/workflows/reusable-review.yml@main
     secrets:
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 ```
@@ -276,7 +276,7 @@ Run the engine locally for development or testing:
 
 ```bash
 # Clone the engine
-git clone https://github.com/AtharvaPrashantBhuse/ai-pr-review.git
+git clone https://github.com/AdityaBirlaCapitalDigital/ai-pr-review.git
 cd ai-pr-review
 npm install
 

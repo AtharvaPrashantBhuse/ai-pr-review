@@ -113,7 +113,7 @@ jobs:
       - name: Checkout ai-pr-review engine
         uses: actions/checkout@v4
         with:
-          repository: AtharvaPrashantBhuse/ai-pr-review
+          repository: AdityaBirlaCapitalDigital/ai-pr-review
           path:        _ai_review_engine
           # No token needed — ai-pr-review must be a public repository,
           # or provide a PAT here if it is private.
