@@ -70,6 +70,9 @@ on:
       GROQ_API_KEY:
         description: 'Groq API key for LLM inference'
         required: true
+      AI_PR_REVIEW_TOKEN:
+        description: 'Fine-grained PAT (Contents: read) for checking out the private ai-pr-review engine repository'
+        required: true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Jobs
@@ -115,8 +118,10 @@ jobs:
         with:
           repository: AdityaBirlaCapitalDigital/ai-pr-review
           path:        _ai_review_engine
-          # No token needed — ai-pr-review must be a public repository,
-          # or provide a PAT here if it is private.
+          # ai-pr-review is a PRIVATE repository, so the default GITHUB_TOKEN
+          # cannot access it. Use a fine-grained PAT (Contents: read) stored as
+          # the AI_PR_REVIEW_TOKEN secret. The value is masked in logs by Actions.
+          token:       ${{ secrets.AI_PR_REVIEW_TOKEN }}
 
       # ── 3. Set up Node.js ─────────────────────────────────────────────────
       - name: Set up Node.js ${{ inputs.node_version }}
