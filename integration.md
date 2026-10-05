@@ -20,7 +20,7 @@ Your repository
       |
    PR opened / updated
       |
-      v  .github/workflows/ai-security-review.yml  (in YOUR repo)
+      v  .github/workflows/ai-pr-review.yml  (in YOUR repo)
          uses: AdityaBirlaCapitalDigital/ai-pr-review/.github/workflows/reusable-review.yml@main
       |
       v  reusable-review.yml  (runs inside ai-pr-review)
@@ -64,15 +64,20 @@ In **your** repository, go to:
 Create this file in **your** repository:
 
 ```
-.github/workflows/ai-security-review.yml
+.github/workflows/ai-pr-review.yml
 ```
 
 ```yaml
-name: AI Security Review
+name: AI Code Review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    # Do NOT add a `branches` filter here.
+    # Without a filter, the review runs on PRs targeting ANY base branch
+    # (develop, main, release/*, feature/*, sprint/*, etc.).
+    # If you restrict to specific branches, PRs targeting other branches
+    # will be silently skipped.
 
 permissions:
   contents:      read
@@ -82,10 +87,24 @@ jobs:
   ai-review:
     uses: AdityaBirlaCapitalDigital/ai-pr-review/.github/workflows/reusable-review.yml@main
     secrets:
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
+      AI_PR_REVIEW_TOKEN: ${{ secrets.AI_PR_REVIEW_TOKEN }}
 ```
 
-That is the complete integration. Commit this file, open a PR, and the review runs automatically.
+That is the complete integration. Commit this file, open a PR, and the review runs automatically on PRs to **any** base branch.
+
+> **If you need to restrict to specific branches** (e.g. you only want review on PRs into `develop` and `main`), use an explicit list:
+> ```yaml
+> on:
+>   pull_request:
+>     types: [opened, synchronize, reopened]
+>     branches:
+>       - develop
+>       - main
+>       - 'release/**'
+>       - 'mf_*/**'
+> ```
+> Any base branch **not** in this list will silently skip the review.
 
 ---
 
@@ -161,10 +180,10 @@ Default limits (all configurable via environment variables):
 | `AI_REVIEW_MAX_GENESIS_CONTEXT_CHARS` | 4 000 | Genesis context section |
 | `AI_REVIEW_MAX_PROMPT_CHARS` | 24 000 | Total combined prompt |
 
-To override a limit, set the environment variable in the `Run AI Security Review` step of your caller workflow:
+To override a limit, set the environment variable in the `Run AI Code Review` step of your caller workflow:
 
 ```yaml
-    - name: Run AI Security Review
+    - name: Run AI Code Review
       env:
         AI_REVIEW_MAX_DIFF_CHARS: "12000"
         AI_REVIEW_MAX_PROMPT_CHARS: "32000"
@@ -221,7 +240,7 @@ The Quality Agent covers a catalog of categories. On-by-default: `correctness`,
 Tune it from the caller workflow's review step without touching the engine:
 
 ```yaml
-    - name: Run AI Security Review
+    - name: Run AI Code Review
       env:
         # Only the highest-signal categories, MEDIUM and above
         AI_REVIEW_QUALITY_CATEGORIES: "correctness,error_handling,performance"
@@ -231,7 +250,7 @@ Tune it from the caller workflow's review step without touching the engine:
 Or keep the defaults but drop a noisier category:
 
 ```yaml
-    - name: Run AI Security Review
+    - name: Run AI Code Review
       env:
         AI_REVIEW_DISABLE_CATEGORIES: "maintainability"
 ```
@@ -244,17 +263,18 @@ runs past end-of-file is rejected as UNVERIFIED.
 
 ## Connecting multiple repositories
 
-Every repository that wants AI security review adds the same two-line caller workflow. The engine is maintained in one place.
+Every repository that wants AI code review adds the same caller workflow. The engine is maintained in one place.
 
 ```yaml
 jobs:
   ai-review:
     uses: AdityaBirlaCapitalDigital/ai-pr-review/.github/workflows/reusable-review.yml@main
     secrets:
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
+      AI_PR_REVIEW_TOKEN: ${{ secrets.AI_PR_REVIEW_TOKEN }}
 ```
 
-Each repository needs only its own `GROQ_API_KEY` secret (or they can share a single org-level secret).
+Each repository needs its own `GROQ_API_KEY` and `AI_PR_REVIEW_TOKEN` secrets (or share them as org-level secrets).
 
 ---
 
@@ -263,7 +283,18 @@ Each repository needs only its own `GROQ_API_KEY` secret (or they can share a si
 The engine reviews files with these extensions:
 
 ```
+# Primary source code
+.dart  .kt  .kts  .swift  .java  .groovy
 .js  .jsx  .ts  .tsx  .mjs  .cjs
+
+# iOS / macOS
+.swift  .m  .h  .plist
+
+# Android / build
+.xml  .gradle  .properties  .pro
+
+# Config / CI
+.yaml  .yml  .sh
 ```
 
 Files that are deleted in the PR, binary, or have no patch available are skipped automatically. All skipped files are listed in the Actions log.

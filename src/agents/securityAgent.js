@@ -132,7 +132,10 @@ Apply to ALL languages — JavaScript/TypeScript, Java, Kotlin, Swift, Groovy, e
   SECRET_IN_URL:    a token/key passed as a URL query parameter.
   Do NOT flag env var reads, config lookups via @Value/@ConfigurationProperties,
   Keychain/Keystore reads, flutter_secure_storage reads, or obvious placeholders
-  ("YOUR_API_KEY", "changeme", "test", "dummy"), or clearly non-production test values.`,
+  ("YOUR_API_KEY", "changeme", "test", "dummy"), or clearly non-production test values.
+  IMPORTANT: Never emit a suggestedFix for HARDCODED_SECRET — a safe replacement
+  cannot be expressed as a single-line edit. Explain the remediation in "explanation"
+  (e.g. use a GitHub Actions secret, environment variable, Keystore, or Keychain).`,
 
   crypto: `CRYPTOGRAPHY
   Applies to ALL languages and their standard crypto libraries.
@@ -340,6 +343,11 @@ Rules:
   line (same indentation), be genuinely safer, and preserve intent. Omit it entirely
   for range findings or when you are not confident a correct one-line fix exists —
   never guess a fix.
+- For HARDCODED_SECRET findings specifically: ALWAYS omit "suggestedFix". The correct
+  remediation (move to an env var, CI secret, Keychain, Keystore, or secure config) cannot
+  be expressed as a single-line drop-in replacement. Put the remediation advice in
+  "explanation" instead — e.g. "Move this value to a GitHub Actions secret or environment
+  variable and reference it as \${{ secrets.MY_TOKEN }} / process.env.MY_TOKEN."
 - Prefer precision over recall: only report issues you are reasonably confident about.
 - Do not report the same issue more than once.`;
 }
