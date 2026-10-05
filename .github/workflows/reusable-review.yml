@@ -203,13 +203,22 @@ jobs:
               per_page:    100,
             });
 
-            // Only review added/modified JS/TS files.
+            // Only review added/modified source files.
             // Deleted files (status === 'removed') are excluded — they do not
             // exist in the checkout and the Evidence Validator would reject
             // every finding against them as UNVERIFIED.
+            //
+            // Supported languages:
+            //   JS/TS:          .js .jsx .ts .tsx .mjs .cjs
+            //   Java/Groovy:    .java .groovy
+            //   Kotlin:         .kt .kts
+            //   Swift:          .swift
+            //   Android/Spring: .xml .gradle .properties
+            //   Build/Config:   .yaml .yml
+            const REVIEWABLE_RE = /\.(js|jsx|ts|tsx|mjs|cjs|java|groovy|kt|kts|swift|xml|gradle|properties|yaml|yml)$/i;
             const reviewable = files
               .filter(f => f.status !== 'removed')
-              .filter(f => /\.(js|jsx|ts|tsx|mjs|cjs)$/.test(f.filename));
+              .filter(f => REVIEWABLE_RE.test(f.filename));
 
             // changed-files.txt — kept for backward-compatibility (legacy --files-from path)
             require('fs').writeFileSync(
@@ -280,7 +289,7 @@ jobs:
             --report-to-pr
         working-directory: ${{ github.workspace }}
 
-      # ── 8. No JS/TS files changed ─────────────────────────────────────────
+      # ── 8. No reviewable files changed ────────────────────────────────────
       - name: No reviewable files
         if:   steps.check.outputs.skip == 'true'
-        run:  echo "✅ No JS/TS files changed in this PR — security review skipped."
+        run:  echo "✅ No reviewable source files changed in this PR — security review skipped."

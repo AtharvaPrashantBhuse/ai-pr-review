@@ -301,17 +301,52 @@ function expandToFunction(lines, start, end) {
 
 /**
  * Heuristic: is this line the start of a function/class/method declaration?
+ *
+ * Covers:
+ *   JavaScript / TypeScript  — function, class, arrow, async, export default
+ *   Java / Groovy            — access-modifier + return-type + name + '('
+ *                              class / interface / enum / @interface declarations
+ *                              annotation method signatures
+ *   Kotlin                   — fun, class, object, interface
+ *   Swift                    — func, class, struct, protocol, extension, enum, init
+ *   Gradle (Groovy DSL)      — task blocks, closure assignments
+ *   XML / Android layouts    — opening XML element tags (context only, no body expansion)
  */
 function isFunctionHeader(line) {
   const t = line.trimStart();
-  return (
-    /^(?:export\s+)?(?:async\s+)?function\s/.test(t) ||
-    /^(?:export\s+)?(?:default\s+)?class\s/.test(t)  ||
-    /^(?:(?:export|static|async|public|private|protected)\s+)*\w+\s*\(/.test(t) ||
-    /(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?\(/.test(t) ||
-    /(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?function/.test(t) ||
-    /^\s*(?:async\s+)?\w+\s*\([^)]*\)\s*\{/.test(t)
-  );
+
+  // ── JavaScript / TypeScript ────────────────────────────────────────────────
+  if (/^(?:export\s+)?(?:async\s+)?function\s/.test(t))                    return true;
+  if (/^(?:export\s+)?(?:default\s+)?class\s/.test(t))                    return true;
+  if (/^(?:(?:export|static|async|public|private|protected)\s+)*\w+\s*\(/.test(t)) return true;
+  if (/(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?\(/.test(t))           return true;
+  if (/(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?function/.test(t))     return true;
+  if (/^\s*(?:async\s+)?\w+\s*\([^)]*\)\s*\{/.test(t))                   return true;
+
+  // ── Java / Groovy ──────────────────────────────────────────────────────────
+  // class / interface / enum / annotation-type declarations
+  if (/^(?:(?:public|protected|private|abstract|final|static|strictfp)\s+)*(?:class|interface|enum|@interface)\s+\w/.test(t)) return true;
+  // method declarations: optional modifiers, return type, name, '('
+  // e.g. "public static List<String> getItems(" or "void onCreate(Bundle"
+  if (/^(?:(?:@\w+\s+)*)?(?:(?:public|protected|private|static|final|abstract|synchronized|native|default|override)\s+)*[\w<>\[\],\s]+\s+\w+\s*\(/.test(t)) return true;
+  // Groovy/Java constructor (no return type before name + '(')
+  if (/^(?:(?:public|protected|private)\s+)\w+\s*\(/.test(t))             return true;
+
+  // ── Kotlin ─────────────────────────────────────────────────────────────────
+  // fun, class, object, interface, companion object, data class, sealed class
+  if (/^(?:(?:public|private|protected|internal|open|abstract|override|inline|suspend|operator|infix|tailrec|external|expect|actual)\s+)*(?:fun|class|object|interface|data\s+class|sealed\s+class|enum\s+class|abstract\s+class|companion\s+object)\s/.test(t)) return true;
+
+  // ── Swift ──────────────────────────────────────────────────────────────────
+  // func, class, struct, protocol, extension, enum, init, subscript
+  if (/^(?:(?:public|private|fileprivate|internal|open|static|class|final|override|required|convenience|mutating|nonmutating|lazy|weak|unowned|@\w+\s+)*)?(?:func|class|struct|protocol|extension|enum|init|deinit|subscript)\s/.test(t)) return true;
+
+  // ── Gradle (Groovy DSL) ────────────────────────────────────────────────────
+  // task myTask(type: ...) { or task('name') {
+  if (/^task\s+\w+/.test(t))                                               return true;
+  // dependencies {  android {  buildTypes {  etc.
+  if (/^\w+\s*\{/.test(t))                                                 return true;
+
+  return false;
 }
 
 /**

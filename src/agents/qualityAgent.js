@@ -59,28 +59,35 @@ export const QUALITY_TYPES = ALL_QUALITY_TYPES;
 const CATEGORY_INSTRUCTIONS = {
   correctness: `CORRECTNESS  (types: "LOGIC_ERROR", "BUG_RISK")
 Flag code whose behaviour clearly does not match its evident intent, or that is
-likely to fault at runtime.
+likely to fault at runtime. Applies to all languages.
   LOGIC_ERROR:
-    - Assignment (=) used where comparison (=== / ==) was intended in a condition.
-    - Inverted or off-by-one conditions (<= vs <, wrong boundary).
-    - == where === is required and coercion changes behaviour.
-    - Always-true / always-false conditions from operator misuse (|| vs &&).
+    - Assignment used where comparison was intended in a condition (= vs ==).
+    - Inverted or off-by-one conditions (wrong boundary, <= vs <).
+    - Type-coercion bugs: JS == vs ===; Java == on String/Object instead of .equals();
+      Kotlin == is structural (correct) but === is reference — misuse is a bug.
+    - Always-true / always-false conditions from operator misuse (|| vs &&, & vs &&).
     - Returning the wrong variable; shadowing that changes the intended target.
-    - Missing await on a promise whose value is then used synchronously.
+    - Missing await on a JS/Kotlin coroutine/promise whose value is used synchronously.
+    - Kotlin: ignoring a suspend return value; Swift: ignoring a throws/try? result.
   BUG_RISK:
-    - Possible null / undefined dereference (property access on a maybe-null value).
-    - Array access / destructuring that may be out of bounds or undefined.
-    - Using a variable before it is defined in the relevant scope.
-    - Off-by-one in loop bounds that reads past the end.
+    - Possible null/nil dereference: JS/TS undefined, Java NPE, Swift optional forced
+      unwrap (!) on a potentially-nil value, Kotlin !! on a nullable.
+    - Array/collection access that may be out of bounds or undefined.
+    - Using a variable before initialisation.
+    - Off-by-one in loop bounds.
+    - Android: accessing views after Fragment/Activity is destroyed; lifecycle misuse.
   Do NOT flag correctly-guarded cases or purely stylistic preferences.`,
 
   dead_code: `DEAD CODE  (type: "DEAD_CODE")
-Flag code that can never execute or has no effect:
+Flag code that can never execute or has no effect. Applies to all languages.
   - Statements after an unconditional return / throw / break / continue.
-  - Unreachable branches (if (false), conditions that are always true/false).
-  - Variables, parameters, imports, or local functions declared but never used.
+  - Unreachable branches (conditions that are always true/false).
+  - Variables, parameters, or local functions declared but never used —
+    JS/TS unused vars; Java/Kotlin/Swift private methods never called;
+    unused imports in Java/Kotlin (import statements for symbols never referenced).
   - Assignments whose result is never read before being overwritten.
-  Do NOT flag exported symbols (public API) or code behind a legitimate flag.`,
+  Do NOT flag exported/public symbols (public API), annotated entries
+  (@Keep in Android, @objc in Swift), or code behind a legitimate feature flag.`,
 
   duplication: `DUPLICATION  (type: "DUPLICATE_CODE")   [RANGE]
 Flag clear copy-paste duplication that should be factored out:
@@ -91,44 +98,58 @@ Flag clear copy-paste duplication that should be factored out:
   Do NOT flag short idiomatic patterns (simple getters/guards) that naturally repeat.`,
 
   error_handling: `ERROR HANDLING  (type: "ERROR_HANDLING")   [RANGE]
-Flag unsafe or missing error handling:
-  - Empty catch blocks or catch blocks that swallow the error silently.
+Flag unsafe or missing error handling. Applies to all languages.
+  - Empty catch blocks or catch blocks that swallow the error silently —
+    Java/Kotlin: catch (Exception e) {} or catch (e: Exception) {}.
   - Over-broad catches that hide real failures.
-  - Operations that can throw/reject with no handling on a realistic failure path.
-  - Resources (files, connections, streams, locks) not released on an error path.
+  - Operations that can throw/reject/fail with no handling on a realistic path.
+  - Resources (files, connections, streams, cursors, locks) not released on an
+    error path — Java: missing try-with-resources or finally close();
+    Android: Cursor not closed; Swift: defer not used for cleanup.
+  - Kotlin: runCatching {} result ignored (neither .onFailure nor .getOrThrow used).
   For a block-level issue set "line"/"endLine" to the try/catch or block span.
   Do NOT flag already-correct handling.`,
 
   maintainability: `MAINTAINABILITY  (types: "MAINTAINABILITY", "COMPLEXITY", "NAMING", "MAGIC_NUMBER", "DOCUMENTATION")
   COMPLEXITY [RANGE]:
-    - Functions that are too long, deeply nested, or have too many branches/params
-      (high cyclomatic complexity) and should be decomposed.
+    - Functions/methods too long, deeply nested, or with too many branches/params
+      (high cyclomatic complexity) — applies equally to Java methods, Kotlin functions,
+      Swift functions, Gradle build scripts.
       Set "line"/"endLine" to the function span.
   MAINTAINABILITY [RANGE]:
-    - Structural smells that hurt future changes (e.g. large switch that should be
-      a lookup, tangled responsibilities). Use a range when it spans lines.
+    - Structural smells that hurt future changes (e.g. large switch/when that should be
+      a lookup/sealed class, tangled responsibilities, God-class). Use a range when
+      it spans lines.
   NAMING:
     - Misleading or non-descriptive identifiers that obscure intent.
   MAGIC_NUMBER:
     - Unexplained literal constants that should be named. Report the exact line.
   DOCUMENTATION:
-    - Missing or incorrect doc on a NON-trivial exported/public function.
+    - Missing or incorrect doc (Javadoc/KDoc/Swift doc comment) on a NON-trivial
+      public/exported function or class.
   Prefer precision; do not nitpick trivially small helpers.`,
 
   performance: `PERFORMANCE  (type: "PERFORMANCE")   [RANGE]
-Flag constructs likely to cause a real performance problem:
-  - Database/network/IO calls inside a loop that should be batched (N+1).
+Flag constructs likely to cause a real performance problem. Applies to all languages.
+  - Database/network/IO calls inside a loop that should be batched (N+1) —
+    JPA/Hibernate N+1, Android Room query in a loop, OkHttp call in a loop.
   - Repeated recomputation of a value that could be hoisted out of a loop.
-  - Blocking synchronous calls on a hot/async path.
+  - Blocking synchronous calls on a hot/async path —
+    Android: network/DB on main thread (StrictMode violation); blocking Kotlin
+    coroutine with Thread.sleep or runBlocking in a suspend context.
   - Building unbounded data structures from unbounded input.
+  - Android: creating objects inside onDraw()/onLayout() causing GC pressure.
   Set "line"/"endLine" to the offending loop/block span where relevant.
   Do NOT flag micro-optimisations with no measurable impact.`,
 
   api_contract: `API / CONTRACT  (type: "API_CONTRACT")
-Flag changes that break or weaken a public/consumer-facing contract:
-  - Changed exported function signature (removed/renamed/reordered params).
+Flag changes that break or weaken a public/consumer-facing contract.
+Applies to all languages — exported JS/TS functions, Java/Kotlin public methods,
+Swift public API, Spring REST endpoints.
+  - Changed exported function/method signature (removed/renamed/reordered params).
   - Changed return type/shape that existing callers rely on.
-  - Inconsistent error contract (throwing where callers expect a returned error, etc.).
+  - Inconsistent error contract (throwing where callers expect a returned error).
+  - Spring: changed @RequestMapping URL, HTTP method, or @RequestParam name.
   Only flag when the symbol is exported or otherwise part of a public surface.
   USE THE REPOSITORY CONTEXT: the "Symbols defined" and "Imported by (blast radius)"
   lines tell you whether a changed symbol is exported and which files depend on it.
@@ -142,14 +163,19 @@ Flag readability/consistency issues that deviate from the surrounding code:
   Keep severity LOW unless it genuinely impairs understanding.`,
 
   test_coverage: `TEST COVERAGE  (type: "TEST_COVERAGE")
-Flag new non-trivial logic or branches added without corresponding tests, when
-the change itself makes this evident. Report the line of the untested logic.
-  USE THE REPOSITORY CONTEXT: the "Symbols defined" lines list the functions in
-  the changed file. If a newly added or substantially changed exported function
-  appears there and the repository context / diff shows no matching test file
-  (e.g. *.test.js, *.spec.js) covering it, flag the function's line.
+Flag new non-trivial logic or branches added without corresponding tests.
+Report the line of the untested logic.
+  USE THE REPOSITORY CONTEXT: the "Symbols defined" lines list the functions/methods in
+  the changed file. If a newly added or substantially changed public method appears there
+  and no matching test file is visible in the context or diff, flag it.
+  Test file naming conventions vary by language/framework:
+    JS/TS:   *.test.js/ts, *.spec.js/ts (Jest/Mocha/Vitest)
+    Java:    *Test.java, *Tests.java, *IT.java (JUnit)
+    Kotlin:  *Test.kt, *Tests.kt (JUnit/Kotest)
+    Swift:   *Tests.swift (XCTest)
+    Android: files under androidTest/ or test/ source sets
   Only flag genuinely non-trivial logic (branches, computation) — not thin
-  wrappers, getters, or config.`,
+  wrappers, getters, config, generated code, or data classes.`,
 };
 
 /**
@@ -182,6 +208,11 @@ function buildSystemPrompt(config) {
   return `You are a meticulous senior software engineer performing an automated peer code review.
 You are NOT looking for security vulnerabilities — a separate reviewer handles those.
 Analyse the supplied source code and repository context for the categories below.
+
+The code may be written in any language: JavaScript, TypeScript, Java, Kotlin,
+Swift, Groovy, XML, Gradle, YAML, .properties, or others. Apply the quality
+catalog to whatever language is present — the finding types and concepts are
+language-agnostic even when examples mention a specific language.
 
 Review ONLY these finding types: ${enabledTypeList}
 Do not emit any other type.

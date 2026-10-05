@@ -71,97 +71,171 @@ export const SECURITY_TYPES = ALL_SECURITY_TYPES;
 
 const CATEGORY_INSTRUCTIONS = {
   injection: `INJECTION
-Flag when untrusted input (req.query/body/params, function args, external data)
+Flag when untrusted input (request parameters, function args, external data)
 reaches a sensitive sink without proper sanitisation/parameterisation.
-  SQL_INJECTION:     input concatenated/interpolated into a SQL string. Parameterised
-                     queries ($1, ?, named params) and prepared statements are SAFE.
-  NOSQL_INJECTION:   input placed into a Mongo/NoSQL query object or $where clause.
-  COMMAND_INJECTION: input in exec/execSync/spawn/child_process/system shell strings.
-  CODE_INJECTION:    eval, new Function(), setTimeout/setInterval with a string,
-                     dynamic require/import driven by user input.
-  LDAP_INJECTION:    input concatenated into an LDAP filter.
+Apply to ALL languages — JavaScript/TypeScript, Java, Kotlin, Swift, Groovy, etc.
+  SQL_INJECTION:     input concatenated/interpolated into a SQL string.
+                     JS: string template/+ in a query. Java: Statement.execute(str),
+                     JDBC string concat. Kotlin: same JDBC patterns.
+                     Parameterised queries ($1, ?, named params), PreparedStatement,
+                     Room @Query with bind args, and ORMs using parameter binding are SAFE.
+  NOSQL_INJECTION:   input placed into a Mongo/NoSQL query object or $where clause;
+                     Firestore queries built from unvalidated input.
+  COMMAND_INJECTION: input in shell execution sinks — JS: exec/execSync/spawn/child_process;
+                     Java/Kotlin: Runtime.exec(), ProcessBuilder with user-controlled args;
+                     Swift: Process()/NSTask with unsanitised arguments.
+  CODE_INJECTION:    JS: eval, new Function(), dynamic require/import from input;
+                     Java/Kotlin: ScriptEngine.eval() with user content;
+                     Android: loadUrl("javascript:"+input), addJavascriptInterface misuse.
+  LDAP_INJECTION:    input concatenated into an LDAP filter string.
   XPATH_INJECTION:   input concatenated into an XPath expression.
-  TEMPLATE_INJECTION:user input compiled/rendered as a server-side template (SSTI).
+  TEMPLATE_INJECTION:user input compiled/rendered as a server-side template (SSTI) —
+                     Spring/Thymeleaf/FreeMarker with unsanitised model attributes.
   HEADER_INJECTION:  input with CR/LF placed into an HTTP header/response.
-  LOG_INJECTION:     unsanitised newline-bearing input written to logs (log forging).
+  LOG_INJECTION:     unsanitised newline-bearing input written to logs (log forging) —
+                     applies equally to Log4j/SLF4J/Logback, os_log, NSLog, console.log.
   Do NOT flag parameterised/escaped/validated paths, or static values.`,
 
   web: `WEB / CLIENT-SIDE
-  XSS:            unescaped user input rendered to HTML (innerHTML, document.write,
-                  React dangerouslySetInnerHTML, template output without escaping).
-  OPEN_REDIRECT:  redirect/location target taken from user input without allow-listing.
-  CSRF:           state-changing route with no CSRF token / SameSite protection.
-  CLICKJACKING:   responses without X-Frame-Options / frame-ancestors on sensitive pages.
+  Applies to web backends (Spring MVC/Boot, Node/Express, etc.) and mobile WebViews.
+  XSS:            unescaped user input rendered to HTML — JS: innerHTML/document.write/
+                  dangerouslySetInnerHTML; server-side: Thymeleaf th:utext, unescaped
+                  template vars; Android: WebView.loadDataWithBaseURL with raw HTML.
+  OPEN_REDIRECT:  redirect/location target taken from user input without allow-listing —
+                  Spring: HttpServletResponse.sendRedirect(param); JS: res.redirect(param).
+  CSRF:           state-changing route/endpoint with no CSRF token or SameSite protection.
+  CLICKJACKING:   HTTP responses without X-Frame-Options / frame-ancestors on sensitive pages.
   INSECURE_CORS:  Access-Control-Allow-Origin '*' combined with credentials, or an
                   origin reflected from the request without validation.
-  POSTMESSAGE_MISUSE: window.postMessage or a message listener without an origin check.
+  POSTMESSAGE_MISUSE: window.postMessage or a message listener without an origin check;
+                  Android: WebView addJavascriptInterface exposed to untrusted content.
   Do NOT flag correctly escaped output or properly validated redirects.`,
 
   secrets: `SECRETS & CREDENTIALS
+  Applies to ALL languages and file types (Java, Kotlin, Swift, XML, Gradle, .properties).
   HARDCODED_SECRET: a real credential literal in source — API keys/tokens, passwords,
                     OAuth secrets, JWT signing secrets, cloud keys (AKIA…, AIza…, gsk_…),
-                    GitHub tokens (ghp_…), PEM private keys, connection strings with a password.
+                    GitHub tokens (ghp_…), PEM private keys, connection strings with password.
+                    Android: hardcoded keys in strings.xml, BuildConfig fields, Gradle files.
+                    iOS/Swift: hardcoded keys in Info.plist references, Swift string literals.
+                    Spring Boot: plain-text passwords in application.properties/yml.
                     Flag only a non-trivial literal that looks like a real credential.
   WEAK_CRYPTO_KEY:  short/predictable/hardcoded key material used for crypto.
-  SECRET_IN_LOG:    a credential/token written to logs or an error message.
+  SECRET_IN_LOG:    a credential/token written to logs — Log4j/SLF4J/Logback, os_log,
+                    NSLog, Android Log.d/e/i, console.log.
   SECRET_IN_URL:    a token/key passed as a URL query parameter.
-  Do NOT flag process.env reads, config lookups, or obvious placeholders
-  ("YOUR_API_KEY", "changeme", "test", "dummy"), or clearly non-production test values.`,
+  Do NOT flag env var reads, config lookups via @Value/@ConfigurationProperties,
+  Keychain/Keystore reads, or obvious placeholders ("YOUR_API_KEY", "changeme",
+  "test", "dummy"), or clearly non-production test values.`,
 
   crypto: `CRYPTOGRAPHY
-  WEAK_HASH:               MD5 / SHA1 used for passwords or integrity.
-  WEAK_CIPHER:             DES / 3DES / RC4, ECB mode, or too-small key sizes.
-  INSECURE_RANDOM:         Math.random() (or similar non-CSPRNG) for tokens/keys/IDs/salts.
-  DISABLED_CERT_VALIDATION: rejectUnauthorized:false, verify=False, NODE_TLS_REJECT_UNAUTHORIZED=0,
-                           or trust-all TLS.
-  MISSING_TLS:             sending credentials/sensitive data over plain http://.
+  Applies to ALL languages and their standard crypto libraries.
+  WEAK_HASH:               MD5/SHA1 used for passwords or integrity — JS: crypto.createHash;
+                           Java: MessageDigest.getInstance("MD5"/"SHA-1");
+                           Swift: CC_MD5/CC_SHA1 (CommonCrypto).
+  WEAK_CIPHER:             DES/3DES/RC4, ECB mode, or too-small key sizes —
+                           Java: Cipher.getInstance("AES/ECB/...") or "DES/...";
+                           Swift/iOS: kCCAlgorithmDES or kCCModeCBC without IV.
+  INSECURE_RANDOM:         non-CSPRNG for tokens/keys/IDs/salts — JS: Math.random();
+                           Java: java.util.Random (use SecureRandom instead);
+                           Swift: arc4random() in a cryptographic context (use
+                           SecRandomCopyBytes instead).
+  DISABLED_CERT_VALIDATION: trust-all TLS — JS: rejectUnauthorized:false;
+                           Java/Android: TrustManager that accepts all certs, HostnameVerifier
+                           returning true unconditionally, okhttp with no cert pinning config;
+                           Swift: URLSession with willSendRequestFor/didReceiveChallenge
+                           always calling completionHandler(.useCredential, ...).
+  MISSING_TLS:             sending credentials/sensitive data over plain http:// —
+                           Android manifest cleartextTrafficPermitted="true" without a
+                           network-security-config exemption; Spring: non-TLS endpoint
+                           for auth routes.
   HARDCODED_IV_SALT:       static/hardcoded initialisation vectors or salts.
-  Do NOT flag strong algorithms (bcrypt/scrypt/argon2, AES-GCM) used correctly.`,
+  Do NOT flag strong algorithms (bcrypt/scrypt/argon2, AES-GCM, SecureRandom) used correctly.`,
 
   files: `FILES & RESOURCES
-  PATH_TRAVERSAL:           user input used to build a filesystem path (../), unsanitised fs ops.
-  SSRF:                     server makes a request to a URL derived from user input.
-  UNRESTRICTED_FILE_UPLOAD: upload handler with no type/extension/size validation.
-  ZIP_SLIP:                 archive extraction that writes outside the target directory.
-  XXE:                      XML parsing with external entity resolution enabled.
-  INSECURE_DESERIALIZATION: untrusted data into pickle/yaml.load/Java deserialization/
-                            JSON reviver with side effects. [RANGE — set line/endLine to the block]
-  REDOS:                    user input matched against a catastrophic-backtracking regex.
+  Applies to ALL languages.
+  PATH_TRAVERSAL:           user input used to build a filesystem path (../) without
+                            canonicalisation — Java: new File(base, userInput) without
+                            getCanonicalPath() check; Swift: URL(fileURLWithPath:) with input.
+  SSRF:                     server makes an HTTP/network request to a URL derived from
+                            user input — Java: HttpURLConnection/OkHttp/RestTemplate with
+                            user-supplied URL; Spring: RestTemplate.getForObject(param, ...).
+  UNRESTRICTED_FILE_UPLOAD: upload handler with no type/extension/size validation —
+                            Spring MultipartFile with no content-type or size check.
+  ZIP_SLIP:                 archive extraction that writes outside the target directory —
+                            Java: ZipEntry.getName() used to construct output path without
+                            canonicalisation; Android: ZipInputStream extraction loops.
+  XXE:                      XML parsing with external entity resolution enabled —
+                            Java: DocumentBuilder/SAXParser/XMLInputFactory without
+                            setFeature(disallow-doctype-decl, true); Android: XmlPullParser
+                            is generally safe, but DOM/SAX parsers are not by default.
+  INSECURE_DESERIALIZATION: untrusted data into deserialisation sinks —
+                            Java: ObjectInputStream.readObject() with untrusted bytes;
+                            Swift: NSKeyedUnarchiver.unarchiveObject(withData:) with
+                            network data; JS: JSON reviver with side effects.
+                            [RANGE — set line/endLine to the deserialisation block]
+  REDOS:                    user input matched against a catastrophic-backtracking regex —
+                            applies equally to java.util.regex.Pattern, Swift NSRegularExpression,
+                            and JS RegExp.
   Do NOT flag validated paths, allow-listed URLs, or safe parsers.`,
 
   data_exposure: `DATA EXPOSURE
-  SENSITIVE_DATA_EXPOSURE: secrets/PII returned in responses, or serialized to the client.
-  VERBOSE_ERROR:           stack traces / internal details returned to the client.
-  MASS_ASSIGNMENT:         binding a whole request body straight into a model/entity
-                           (over-posting) without an allow-list of fields.
-  PII_LOGGING:             logging emails, card numbers, SSNs, tokens, or other PII.
+  SENSITIVE_DATA_EXPOSURE: secrets/PII returned in API responses, serialized to the client,
+                           or written to Android SharedPreferences/iOS NSUserDefaults unencrypted.
+  VERBOSE_ERROR:           stack traces / internal details returned to the client —
+                           Spring Boot default error responses in prod; exception messages
+                           surfaced to Android UI or iOS error alerts.
+  MASS_ASSIGNMENT:         binding a whole request body straight into a model/entity without
+                           an allow-list — Spring: @ModelAttribute/@RequestBody to an entity
+                           class with no @JsonIgnoreProperties; JPA entity exposed directly.
+  PII_LOGGING:             logging emails, card numbers, SSNs, tokens, or other PII —
+                           Log4j/SLF4J/Logback, Android Log.*, os_log/NSLog, console.log.
   Do NOT flag redacted logs or explicitly whitelisted response fields.`,
 
   config: `CONFIGURATION
-  INSECURE_CONFIG:         debug mode enabled in production, permissive defaults,
-                           default/blank credentials, dangerous framework settings.
-  MISSING_SECURITY_HEADERS: absent CSP / HSTS / X-Content-Type-Options where expected.
-  DANGEROUS_PERMISSIONS:   world-writable files/dirs (chmod 0777), over-broad IAM/OAuth scopes.
-  SUPPLY_CHAIN_RISK:       install/postinstall scripts running network/shell commands, or a
-                           dependency name that looks like a typosquat of a popular package.
+  Applies to code, XML, Gradle, .properties, YAML, and AndroidManifest.xml.
+  INSECURE_CONFIG:         debug mode enabled in production (android:debuggable="true" in
+                           release manifest; Spring Boot management endpoints exposed;
+                           DEBUG=true in prod config); permissive defaults; default/blank
+                           credentials; dangerous framework settings.
+  MISSING_SECURITY_HEADERS: absent CSP / HSTS / X-Content-Type-Options on HTTP responses
+                           where expected (Spring Security config).
+  DANGEROUS_PERMISSIONS:   world-writable files/dirs (chmod 0777); over-broad IAM/OAuth scopes;
+                           Android manifest: exported=true on sensitive Activity/Service/
+                           Provider with no permission check; over-broad uses-permission
+                           (READ_CONTACTS, ACCESS_FINE_LOCATION) without justification in diff.
+  SUPPLY_CHAIN_RISK:       Gradle/Maven dependency with an unusual group/artifact that looks
+                           like a typosquat; install/postinstall scripts (package.json) running
+                           network/shell commands; dynamic dependency versions ('+' or 'latest')
+                           in build.gradle that prevent reproducible builds.
   Do NOT report known-CVE dependency versions — that is a scanner's job, not yours.`,
 
   auth: `AUTH / ACCESS CONTROL
-  MISSING_AUTH_CHECK:      a sensitive route/handler with no authentication guard.
+  Applies to all backend frameworks (Spring, Express, etc.) and mobile apps.
+  MISSING_AUTH_CHECK:      a sensitive route/handler/endpoint with no authentication guard —
+                           Spring: @RequestMapping method with no @PreAuthorize / Spring
+                           Security filter; Android: exported Activity/ContentProvider with
+                           no permission check or intent validation.
                            [RANGE — set line/endLine to the handler]
-  BROKEN_ACCESS_CONTROL:   object accessed by user-supplied id without an ownership/role
-                           check (IDOR). [RANGE — set line/endLine to the handler]
-  WEAK_PASSWORD_POLICY:    passwords stored without hashing, or with weak hashing.
+  BROKEN_ACCESS_CONTROL:   resource accessed by user-supplied id without an ownership/role
+                           check (IDOR) — Spring: repository.findById(param) without verifying
+                           the caller owns the record.
+                           [RANGE — set line/endLine to the handler]
+  WEAK_PASSWORD_POLICY:    passwords stored without hashing, or with weak hashing —
+                           Java: storing plain text or MD5 password; Spring: no PasswordEncoder.
   INSECURE_JWT:            alg 'none', unverified signature, secret misuse, or no expiry check.
   INSECURE_SESSION:        non-rotating session IDs, or cookies missing HttpOnly/Secure/SameSite.
   PRIVILEGE_ESCALATION:    role/permission assigned from user-controlled input.
   Only flag when you can see the missing control in the supplied code; do not
   assume a check is absent merely because it is not in the diff window.`,
 
-  api: `API / GRAPHQL
-  MISSING_RATE_LIMIT:      auth or expensive endpoints with no throttling/rate limit.
-  GRAPHQL_INTROSPECTION:   introspection enabled, or no query depth/complexity limit, in prod.
-  EXCESSIVE_DATA_EXPOSURE: an endpoint returning far more fields than the client needs.
+  api: `API / GRAPHQL / REST
+  MISSING_RATE_LIMIT:      auth or expensive endpoints with no throttling/rate limit —
+                           Spring Boot endpoint with no rate-limit filter or annotation;
+                           Android API client retrying without backoff on 429.
+  GRAPHQL_INTROSPECTION:   introspection enabled in prod, or no query depth/complexity limit.
+  EXCESSIVE_DATA_EXPOSURE: an endpoint returning far more fields than the client needs —
+                           Spring: returning a full JPA entity instead of a DTO.
   Only flag when the concern is evident from the supplied code.`,
 };
 
@@ -197,6 +271,11 @@ function buildSystemPrompt(config) {
   return `You are a meticulous senior application-security engineer performing an
 automated security review of a Pull Request. Analyse the supplied source code and
 repository context for the categories below.
+
+The code may be written in any language: JavaScript, TypeScript, Java, Kotlin,
+Swift, Groovy, XML, Gradle, YAML, .properties, or others. Apply the security
+catalog to whatever language is present — the finding types and concepts are
+language-agnostic even when the examples mention a specific language.
 
 Review ONLY these finding types: ${enabledTypeList}
 Do not emit any other type.

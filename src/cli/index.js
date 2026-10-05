@@ -295,7 +295,7 @@ if (filesFrom) {
 const { reviewable, skipped } = classifyFiles(rawPaths, repoRoot);
 
 if (rawPaths.length === 0 || reviewable.length === 0) {
-  console.log('ℹ  No reviewable JS/TS files found.');
+  console.log('ℹ  No reviewable source files found.');
   printSkipped(skipped);
   process.exit(0);
 }

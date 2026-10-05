@@ -64,8 +64,22 @@ import { dedupeFindings }                           from './findingDedup.js';
 import { validateFindings }                        from '../validation/evidenceValidator.js';
 import { DEFAULT_MODEL }                           from '../integrations/groq.js';
 
-// Extensions the engine will review
-const REVIEWABLE_EXTS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']);
+// Extensions the engine will review.
+// Keep this in sync with the REVIEWABLE_RE regex in reusable-review.yml.
+const REVIEWABLE_EXTS = new Set([
+  // JavaScript / TypeScript
+  '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+  // Java / JVM
+  '.java', '.groovy',
+  // Kotlin (Android + multiplatform)
+  '.kt', '.kts',
+  // Swift (iOS / macOS)
+  '.swift',
+  // Android / Spring Boot config & build
+  '.xml', '.gradle', '.properties',
+  // Generic config / CI
+  '.yaml', '.yml',
+]);
 
 
 
@@ -344,7 +358,7 @@ export function classifyFiles(rawPaths, repoRoot) {
     if (!p) continue;
 
     if (!REVIEWABLE_EXTS.has(extname(p).toLowerCase())) {
-      skipped.push({ path: p, reason: 'not a reviewable source file (JS/TS only)' });
+      skipped.push({ path: p, reason: 'not a reviewable source file (unsupported extension)' });
       continue;
     }
 
@@ -389,7 +403,7 @@ function wrapFileAsDiff(relPath, content) {
 
 /**
  * Extract relative file paths from a unified diff header.
- * Falls back to scanning for JS/TS file references in the text.
+ * Falls back to scanning for supported source file references in the text.
  * Only returns paths that actually exist under repoRoot.
  */
 function extractFilePaths(diffText, repoRoot) {
@@ -403,9 +417,12 @@ function extractFilePaths(diffText, repoRoot) {
     }
   }
 
-  // Fallback: look for JS/TS file references in the text
+  // Fallback: look for source file references in the text when no standard
+  // unified-diff headers were found.  Matches all extensions in REVIEWABLE_EXTS.
   if (paths.size === 0) {
-    for (const match of diffText.matchAll(/\b([\w./-]+\.(?:m?[jt]sx?|cjs|mjs))\b/g)) {
+    for (const match of diffText.matchAll(
+      /\b([\w./-]+\.(?:m?[jt]sx?|cjs|mjs|java|groovy|kt|kts|swift|xml|gradle|properties|ya?ml))\b/gi
+    )) {
       paths.add(match[1].replace(/\\/g, '/'));
     }
   }
