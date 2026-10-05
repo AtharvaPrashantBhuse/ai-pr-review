@@ -209,13 +209,18 @@ jobs:
             // every finding against them as UNVERIFIED.
             //
             // Supported languages:
-            //   JS/TS:          .js .jsx .ts .tsx .mjs .cjs
-            //   Java/Groovy:    .java .groovy
-            //   Kotlin:         .kt .kts
-            //   Swift:          .swift
-            //   Android/Spring: .xml .gradle .properties
-            //   Build/Config:   .yaml .yml
-            const REVIEWABLE_RE = /\.(js|jsx|ts|tsx|mjs|cjs|java|groovy|kt|kts|swift|xml|gradle|properties|yaml|yml)$/i;
+            //   JS/TS:             .js .jsx .ts .tsx .mjs .cjs
+            //   Java/Groovy:       .java .groovy
+            //   Kotlin:            .kt .kts
+            //   Swift:             .swift
+            //   Dart/Flutter:      .dart
+            //   Objective-C:       .m .h
+            //   Android/Spring:    .xml .gradle .properties
+            //   iOS config:        .plist
+            //   ProGuard rules:    .pro
+            //   Build/Config:      .yaml .yml
+            //   Shell scripts:     .sh
+            const REVIEWABLE_RE = /\.(js|jsx|ts|tsx|mjs|cjs|java|groovy|kt|kts|swift|dart|m|h|xml|gradle|properties|plist|pro|yaml|yml|sh)$/i;
             const reviewable = files
               .filter(f => f.status !== 'removed')
               .filter(f => REVIEWABLE_RE.test(f.filename));

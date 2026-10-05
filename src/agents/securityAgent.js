@@ -83,7 +83,10 @@ Apply to ALL languages — JavaScript/TypeScript, Java, Kotlin, Swift, Groovy, e
                      Firestore queries built from unvalidated input.
   COMMAND_INJECTION: input in shell execution sinks — JS: exec/execSync/spawn/child_process;
                      Java/Kotlin: Runtime.exec(), ProcessBuilder with user-controlled args;
-                     Swift: Process()/NSTask with unsanitised arguments.
+                     Swift: Process()/NSTask with unsanitised arguments;
+                     Objective-C: NSTask with user-controlled arguments;
+                     Shell scripts: eval "$userInput", unquoted variable expansion in
+                     command position (e.g. $cmd, \`$input\`), or xargs with unsanitised input.
   CODE_INJECTION:    JS: eval, new Function(), dynamic require/import from input;
                      Java/Kotlin: ScriptEngine.eval() with user content;
                      Android: loadUrl("javascript:"+input), addJavascriptInterface misuse.
@@ -112,21 +115,24 @@ Apply to ALL languages — JavaScript/TypeScript, Java, Kotlin, Swift, Groovy, e
   Do NOT flag correctly escaped output or properly validated redirects.`,
 
   secrets: `SECRETS & CREDENTIALS
-  Applies to ALL languages and file types (Java, Kotlin, Swift, XML, Gradle, .properties).
+  Applies to ALL languages and file types (Java, Kotlin, Swift, Dart, XML, Gradle, .properties).
   HARDCODED_SECRET: a real credential literal in source — API keys/tokens, passwords,
                     OAuth secrets, JWT signing secrets, cloud keys (AKIA…, AIza…, gsk_…),
                     GitHub tokens (ghp_…), PEM private keys, connection strings with password.
                     Android: hardcoded keys in strings.xml, BuildConfig fields, Gradle files.
                     iOS/Swift: hardcoded keys in Info.plist references, Swift string literals.
+                    Objective-C .m/.h: hardcoded NSString credential literals.
+                    Flutter/Dart: hardcoded keys in Dart source or pubspec.yaml.
+                    Shell scripts: credentials assigned to variables (TOKEN=..., API_KEY=...).
                     Spring Boot: plain-text passwords in application.properties/yml.
                     Flag only a non-trivial literal that looks like a real credential.
   WEAK_CRYPTO_KEY:  short/predictable/hardcoded key material used for crypto.
   SECRET_IN_LOG:    a credential/token written to logs — Log4j/SLF4J/Logback, os_log,
-                    NSLog, Android Log.d/e/i, console.log.
+                    NSLog, Android Log.d/e/i, Dart print()/debugPrint(), console.log.
   SECRET_IN_URL:    a token/key passed as a URL query parameter.
   Do NOT flag env var reads, config lookups via @Value/@ConfigurationProperties,
-  Keychain/Keystore reads, or obvious placeholders ("YOUR_API_KEY", "changeme",
-  "test", "dummy"), or clearly non-production test values.`,
+  Keychain/Keystore reads, flutter_secure_storage reads, or obvious placeholders
+  ("YOUR_API_KEY", "changeme", "test", "dummy"), or clearly non-production test values.`,
 
   crypto: `CRYPTOGRAPHY
   Applies to ALL languages and their standard crypto libraries.
@@ -138,6 +144,7 @@ Apply to ALL languages — JavaScript/TypeScript, Java, Kotlin, Swift, Groovy, e
                            Swift/iOS: kCCAlgorithmDES or kCCModeCBC without IV.
   INSECURE_RANDOM:         non-CSPRNG for tokens/keys/IDs/salts — JS: Math.random();
                            Java: java.util.Random (use SecureRandom instead);
+                           Dart: dart:math Random() (use Random.secure() instead);
                            Swift: arc4random() in a cryptographic context (use
                            SecRandomCopyBytes instead).
   DISABLED_CERT_VALIDATION: trust-all TLS — JS: rejectUnauthorized:false;
@@ -193,21 +200,29 @@ Apply to ALL languages — JavaScript/TypeScript, Java, Kotlin, Swift, Groovy, e
   Do NOT flag redacted logs or explicitly whitelisted response fields.`,
 
   config: `CONFIGURATION
-  Applies to code, XML, Gradle, .properties, YAML, and AndroidManifest.xml.
+  Applies to code, XML, Gradle, .properties, YAML, AndroidManifest.xml, .plist,
+  .pro (ProGuard), and shell scripts.
   INSECURE_CONFIG:         debug mode enabled in production (android:debuggable="true" in
                            release manifest; Spring Boot management endpoints exposed;
                            DEBUG=true in prod config); permissive defaults; default/blank
                            credentials; dangerous framework settings.
+                           iOS .plist: NSAllowsArbitraryLoads=true in ATS config;
+                           missing required permission descriptions (NSCameraUsageDescription etc.)
+                           ProGuard .pro: missing keep rules for security-sensitive classes
+                           that may be stripped, breaking certificate pinning or auth checks.
   MISSING_SECURITY_HEADERS: absent CSP / HSTS / X-Content-Type-Options on HTTP responses
                            where expected (Spring Security config).
-  DANGEROUS_PERMISSIONS:   world-writable files/dirs (chmod 0777); over-broad IAM/OAuth scopes;
+  DANGEROUS_PERMISSIONS:   world-writable files/dirs (chmod 0777 in shell scripts);
+                           over-broad IAM/OAuth scopes;
                            Android manifest: exported=true on sensitive Activity/Service/
-                           Provider with no permission check; over-broad uses-permission
-                           (READ_CONTACTS, ACCESS_FINE_LOCATION) without justification in diff.
+                           Provider with no permission check; over-broad uses-permission;
+                           iOS .plist: over-broad entitlements or missing purpose strings.
   SUPPLY_CHAIN_RISK:       Gradle/Maven dependency with an unusual group/artifact that looks
-                           like a typosquat; install/postinstall scripts (package.json) running
-                           network/shell commands; dynamic dependency versions ('+' or 'latest')
-                           in build.gradle that prevent reproducible builds.
+                           like a typosquat; install/postinstall scripts (package.json/pubspec)
+                           running network/shell commands; dynamic dependency versions
+                           ('+' or 'latest') in build.gradle that prevent reproducible builds;
+                           shell scripts (*.sh) downloading and executing remote code
+                           (curl | bash, wget | sh patterns).
   Do NOT report known-CVE dependency versions — that is a scanner's job, not yours.`,
 
   auth: `AUTH / ACCESS CONTROL
@@ -273,8 +288,9 @@ automated security review of a Pull Request. Analyse the supplied source code an
 repository context for the categories below.
 
 The code may be written in any language: JavaScript, TypeScript, Java, Kotlin,
-Swift, Groovy, XML, Gradle, YAML, .properties, or others. Apply the security
-catalog to whatever language is present — the finding types and concepts are
+Swift, Objective-C, Dart, Groovy, XML, Gradle, YAML, .properties, .plist,
+ProGuard (.pro), shell scripts (.sh), or others. Apply the security catalog to
+whatever language is present — the finding types and concepts are
 language-agnostic even when the examples mention a specific language.
 
 Review ONLY these finding types: ${enabledTypeList}

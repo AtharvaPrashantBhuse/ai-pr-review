@@ -346,6 +346,24 @@ function isFunctionHeader(line) {
   // dependencies {  android {  buildTypes {  etc.
   if (/^\w+\s*\{/.test(t))                                                 return true;
 
+  // ── Dart / Flutter ─────────────────────────────────────────────────────────
+  // void/Future/Stream/Widget/Type returnType methodName( ...
+  // e.g. "Widget build(BuildContext context) {" or "Future<void> fetchData() async {"
+  if (/^(?:(?:static|async|@\w+\s+)*)?(?:void|Future|Stream|Widget|String|int|double|bool|List|Map|Set|dynamic|[\w<>?]+)\s+\w+\s*\(/.test(t)) return true;
+  // class / abstract class / mixin / extension / enum
+  if (/^(?:abstract\s+)?(?:class|mixin|extension|enum)\s+\w/.test(t))     return true;
+
+  // ── Objective-C (.m / .h) ──────────────────────────────────────────────────
+  // Instance method:  - (ReturnType)methodName:
+  // Class method:     + (ReturnType)methodName:
+  if (/^[-+]\s*\(/.test(t))                                                return true;
+  // @interface / @implementation / @protocol
+  if (/^@(?:interface|implementation|protocol)\s+\w/.test(t))             return true;
+
+  // ── Shell scripts (.sh) ────────────────────────────────────────────────────
+  // function foo() { or foo() {
+  if (/^(?:function\s+)?\w[\w-]*\s*\(\s*\)\s*\{/.test(t))                return true;
+
   return false;
 }
 

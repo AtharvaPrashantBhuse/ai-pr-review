@@ -59,14 +59,17 @@ const CATEGORY_INSTRUCTIONS = {
   coverage: `COVERAGE  (types: "MISSING_TEST", "UNTESTED_EDGE_CASE", "UNTESTED_ERROR_PATH")
 Judge test coverage of the CHANGED code. Use the repository context ("Symbols
 defined", test files present) when deciding whether a test exists.
-Applies to all languages and test frameworks (Jest/Vitest, JUnit 5, Kotest, XCTest).
+Applies to all languages and test frameworks (Jest/Vitest, JUnit 5, Kotest, XCTest,
+flutter_test/dart:test).
   MISSING_TEST:        a new or substantially changed non-trivial function/method/branch
                        with no accompanying test anywhere in the change or context.
   UNTESTED_EDGE_CASE:  the happy path is tested but empty/null/boundary/invalid inputs
-                       are not — applies equally to JS, Java @Test methods, Swift XCTest.
+                       are not — applies equally to JS, Java @Test methods, Swift XCTest,
+                       Dart test() blocks.
   UNTESTED_ERROR_PATH: a throw/catch/exception/rejection path with no test exercising it —
                        JS: no .rejects / try-catch in test; Java: no assertThrows();
-                       Swift: no XCTAssertThrowsError().
+                       Swift: no XCTAssertThrowsError();
+                       Dart: no expect(() => ..., throwsA(...)) or expectLater.
   Report the line of the untested production logic (or the test that should be extended).
   Do NOT flag trivial wrappers, getters, config, data classes, or generated code.
   Note: you cannot measure coverage precisely — only flag clear gaps.`,
@@ -103,7 +106,9 @@ Applies to all languages and test frameworks (Jest/Vitest, JUnit 5, Kotest, XCTe
   RACE_IN_TEST:         unawaited async work whose result an assertion then reads —
                         JS: unawaited promise; Java: missing CountDownLatch/CompletableFuture
                         join; Kotlin: missing runTest/advanceUntilIdle; Swift: missing
-                        XCTestExpectation/fulfill()/wait().
+                        XCTestExpectation/fulfill()/wait();
+                        Dart: missing await on a Future in a test body, or missing
+                        pumpAndSettle() in a flutter_test widget test.
   Do NOT flag tests that already fake timers, seed randomness, or mock the network.`,
 
   hygiene: `TEST HYGIENE  (types: "SKIPPED_TEST", "EMPTY_TEST", "COMMENTED_OUT_TEST", "DUPLICATE_TEST", "POOR_TEST_NAME")
@@ -212,9 +217,10 @@ test-related aspects of the change — not security or general code quality
 (separate reviewers handle those).
 
 The code may be written in any language or test framework: Jest/Vitest/Mocha
-(JavaScript/TypeScript), JUnit 5/Mockito/Kotest (Java/Kotlin), XCTest (Swift),
-or others. Apply the testing catalog to whatever framework is present — the
-finding types are framework-agnostic even when examples name a specific framework.
+(JavaScript/TypeScript), JUnit 5/Mockito/Kotest (Java/Kotlin), XCTest (Swift/
+Objective-C), flutter_test/dart:test (Dart/Flutter), or others. Apply the
+testing catalog to whatever framework is present — the finding types are
+framework-agnostic even when examples name a specific framework.
 
 Review ONLY these finding types: ${enabledTypeList}
 Do not emit any other type.

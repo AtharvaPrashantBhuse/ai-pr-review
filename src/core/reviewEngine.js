@@ -75,10 +75,20 @@ const REVIEWABLE_EXTS = new Set([
   '.kt', '.kts',
   // Swift (iOS / macOS)
   '.swift',
+  // Dart / Flutter
+  '.dart',
+  // Objective-C (native plugin bridges)
+  '.m', '.h',
   // Android / Spring Boot config & build
   '.xml', '.gradle', '.properties',
+  // iOS property lists (permissions, entitlements)
+  '.plist',
+  // ProGuard / R8 obfuscation rules
+  '.pro',
   // Generic config / CI
   '.yaml', '.yml',
+  // Shell build scripts
+  '.sh',
 ]);
 
 
@@ -421,7 +431,7 @@ function extractFilePaths(diffText, repoRoot) {
   // unified-diff headers were found.  Matches all extensions in REVIEWABLE_EXTS.
   if (paths.size === 0) {
     for (const match of diffText.matchAll(
-      /\b([\w./-]+\.(?:m?[jt]sx?|cjs|mjs|java|groovy|kt|kts|swift|xml|gradle|properties|ya?ml))\b/gi
+      /\b([\w./-]+\.(?:m?[jt]sx?|cjs|mjs|java|groovy|kt|kts|swift|dart|[mh]|xml|gradle|properties|plist|pro|ya?ml|sh))\b/gi
     )) {
       paths.add(match[1].replace(/\\/g, '/'));
     }

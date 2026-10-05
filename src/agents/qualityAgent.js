@@ -71,7 +71,8 @@ likely to fault at runtime. Applies to all languages.
     - Kotlin: ignoring a suspend return value; Swift: ignoring a throws/try? result.
   BUG_RISK:
     - Possible null/nil dereference: JS/TS undefined, Java NPE, Swift optional forced
-      unwrap (!) on a potentially-nil value, Kotlin !! on a nullable.
+      unwrap (!) on a potentially-nil value, Kotlin !! on a nullable,
+      Dart: ! on a nullable or unguarded late variable access before assignment.
     - Array/collection access that may be out of bounds or undefined.
     - Using a variable before initialisation.
     - Off-by-one in loop bounds.
@@ -83,7 +84,7 @@ Flag code that can never execute or has no effect. Applies to all languages.
   - Statements after an unconditional return / throw / break / continue.
   - Unreachable branches (conditions that are always true/false).
   - Variables, parameters, or local functions declared but never used —
-    JS/TS unused vars; Java/Kotlin/Swift private methods never called;
+    JS/TS unused vars; Java/Kotlin/Swift/ObjC private methods never called;
     unused imports in Java/Kotlin (import statements for symbols never referenced).
   - Assignments whose result is never read before being overwritten.
   Do NOT flag exported/public symbols (public API), annotated entries
@@ -173,6 +174,7 @@ Report the line of the untested logic.
     Java:    *Test.java, *Tests.java, *IT.java (JUnit)
     Kotlin:  *Test.kt, *Tests.kt (JUnit/Kotest)
     Swift:   *Tests.swift (XCTest)
+    Dart:    *_test.dart (flutter test / dart test)
     Android: files under androidTest/ or test/ source sets
   Only flag genuinely non-trivial logic (branches, computation) — not thin
   wrappers, getters, config, generated code, or data classes.`,
@@ -210,8 +212,9 @@ You are NOT looking for security vulnerabilities — a separate reviewer handles
 Analyse the supplied source code and repository context for the categories below.
 
 The code may be written in any language: JavaScript, TypeScript, Java, Kotlin,
-Swift, Groovy, XML, Gradle, YAML, .properties, or others. Apply the quality
-catalog to whatever language is present — the finding types and concepts are
+Swift, Objective-C, Dart, Groovy, XML, Gradle, YAML, .properties, .plist,
+ProGuard (.pro), shell scripts (.sh), or others. Apply the quality catalog to
+whatever language is present — the finding types and concepts are
 language-agnostic even when examples mention a specific language.
 
 Review ONLY these finding types: ${enabledTypeList}
