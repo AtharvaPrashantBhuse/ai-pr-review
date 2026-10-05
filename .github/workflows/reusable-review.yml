@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # reusable-review.yml
 #
-# REUSABLE GitHub Actions workflow for AI PR Security Review.
+# REUSABLE GitHub Actions workflow for AI PR Code Review.
 #
 # This workflow is called by OTHER repositories via workflow_call.
 # It NEVER reviews the ai-pr-review repository itself.
@@ -33,7 +33,7 @@
 #   pull-requests: write  — post review comment
 # ─────────────────────────────────────────────────────────────────────────────
 
-name: Reusable AI PR Security Review
+name: Reusable AI PR Code Review
 
 on:
   workflow_call:
@@ -79,8 +79,8 @@ on:
 # ─────────────────────────────────────────────────────────────────────────────
 
 jobs:
-  ai-security-review:
-    name: AI Security Review
+  ai-pr-review:
+    name: AI Code Review
     runs-on: ubuntu-latest
 
     # These permissions are for the GITHUB_TOKEN of the CALLER repository.
@@ -257,14 +257,14 @@ jobs:
           COUNT="${{ steps.changed-files.outputs.count }}"
           if [ -z "$COUNT" ] || [ "$COUNT" -eq "0" ]; then
             echo "skip=true"  >> "$GITHUB_OUTPUT"
-            echo "No JS/TS files changed — skipping security review."
+            echo "No reviewable source files changed — skipping review."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "$COUNT file(s) will be reviewed."
           fi
 
-      # ── 7. Run AI Security Review ─────────────────────────────────────────
-      - name: Run AI Security Review
+      # ── 7. Run AI Code Review ─────────────────────────────────────────────
+      - name: Run AI Code Review
         if:   steps.check.outputs.skip == 'false'
         env:
           # LLM infrastructure — from GitHub Secret in the CALLER repository
@@ -292,4 +292,4 @@ jobs:
       # ── 8. No reviewable files changed ────────────────────────────────────
       - name: No reviewable files
         if:   steps.check.outputs.skip == 'true'
-        run:  echo "✅ No reviewable source files changed in this PR — security review skipped."
+        run:  echo "✅ No reviewable source files changed in this PR — review skipped."
