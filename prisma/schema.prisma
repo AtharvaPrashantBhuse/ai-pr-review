@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Repository {
+    id Int @id @default(autoincrement())
+    name String
+    githubOrg String
+    enabled   Boolean  @default(true)
+
+    pullRequests PullRequest[]
+}
+
+model PullRequest {
+  id           Int @id @default(autoincrement())
+  repositoryId Int
+  prNumber     Int
+  title        String
+  developer    String
+  status       String
+  createdAt    DateTime @default(now())
+
+  reviews Review[]
+
+  repository Repository @relation(fields: [repositoryId], references: [id])
+}
+
+model Review {
+  id            Int       @id @default(autoincrement())
+  pullRequestId Int
+  status        String
+  totalFindings Int       @default(0)
+  startedAt     DateTime
+  completedAt   DateTime?
+  tokenUsage TokenUsage[]
+
+  pullRequest PullRequest @relation(fields: [pullRequestId], references: [id])
+}
+
+model TokenUsage {
+  id Int @id @default(autoincrement())
+  reviewId Int
+  inputToken Int
+  outputToken Int
+  agent String
+  model String
+  createdAt DateTime @default(now())
+
+  review Review @relation(fields: [reviewId], references: [id])
+}

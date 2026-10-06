@@ -8,18 +8,30 @@
     "node": ">=20"
   },
   "scripts": {
-    "test":             "vitest run",
-    "test:watch":       "vitest",
-    "ai-review":        "node src/cli/index.js",
-    "ai-review:test":   "node src/cli/index.js fixtures/vulnerable.js",
-    "smoke":            "node scripts/smoke-test.js"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "ai-review": "node src/cli/index.js",
+    "ai-review:test": "node src/cli/index.js fixtures/vulnerable.js",
+    "smoke": "node scripts/smoke-test.js",
+    "postinstall": "prisma skills sync || exit 0"
   },
   "dependencies": {
-    "dotenv":  "16.4.5",
-    "openai":  "4.47.3",
-    "undici":  "6.18.2"
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "@prisma/orm-postgres": "^8.0.0-rc.14",
+    "dotenv": "16.4.5",
+    "next": "^16.3.8",
+    "openai": "4.47.3",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "undici": "6.18.2"
   },
   "devDependencies": {
-    "vitest":  "1.6.0"
+    "prisma": "^7.10.0",
+    "typescript": "7.0.2",
+    "vitest": "1.6.0"
   }
 }
